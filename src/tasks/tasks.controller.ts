@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get, Post } from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
@@ -12,37 +12,35 @@ import { TasksService } from './tasks.service.js';
  *       decorators, parameter decorators (@Param, @Body, pipes) and the
  *       status-code decorators to every method.
  */
-@Controller()
+@Controller('tasks')
 export class TasksController {
   // TODO: Inject TasksService through the constructor.
+  constructor(private readonly tasksService: TasksService) {}
 
+  @Post()
   create(dto: CreateTaskDto): Task {
     // TODO: Implement the controller endpoint (POST /tasks).
-    void dto;
-    throw new Error('Not implemented');
+    return this.tasksService.create(dto);
   }
 
+  @Get()
   findAll(): Task[] {
     // TODO: Implement the controller endpoint (GET /tasks).
-    throw new Error('Not implemented');
+    return this.tasksService.findAll();
   }
 
   findOne(id: number): Task {
     // TODO: Implement the controller endpoint (GET /tasks/:id).
-    void id;
-    throw new Error('Not implemented');
+    return this.tasksService.findOne(id);
   }
 
   update(id: number, dto: UpdateTaskDto): Task {
     // TODO: Implement the controller endpoint (PATCH /tasks/:id).
-    void id;
-    void dto;
-    throw new Error('Not implemented');
+    return this.tasksService.update(id, dto);
   }
 
   remove(id: number): void {
     // TODO: Implement the controller endpoint (DELETE /tasks/:id).
-    void id;
-    throw new Error('Not implemented');
+    return this.tasksService.remove(id);
   }
 }

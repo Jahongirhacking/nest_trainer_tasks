@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
@@ -11,34 +11,51 @@ import type { Task } from './entities/task.entity.js';
 @Injectable()
 export class TasksService {
   // TODO: Add the in-memory storage (and whatever you need for ID generation).
+  private readonly tasks: Task[] = [];
+
+  generateId() {
+    return Math.ceil(1_000_000 * Math.random());
+  }
 
   create(dto: CreateTaskDto): Task {
     // TODO: Implement task creation.
-    void dto;
-    throw new Error('Not implemented');
+    const newTask = {
+      ...dto,
+      id: this.generateId(),
+      createdAt: new Date(),
+      completed: false,
+    };
+    this.tasks.push(newTask);
+    return newTask;
   }
 
   findAll(): Task[] {
     // TODO: Implement listing all tasks.
-    throw new Error('Not implemented');
+    return this.tasks;
   }
 
   findOne(id: number): Task {
     // TODO: Implement task lookup (throw the proper Nest exception if missing).
-    void id;
-    throw new Error('Not implemented');
+    const task = this.tasks.find((t) => t?.id === id);
+    if (!task) throw new NotFoundException('Task not found');
+    return task;
   }
 
   update(id: number, dto: UpdateTaskDto): Task {
     // TODO: Implement task update.
-    void id;
-    void dto;
-    throw new Error('Not implemented');
+    const task = this.findOne(id);
+    Object.entries(dto).forEach(([key, value]) => {
+      if (value !== undefined) {
+        Object.assign(task, { [key]: value });
+      }
+    });
+    return task;
   }
 
   remove(id: number): void {
     // TODO: Implement task deletion.
-    void id;
-    throw new Error('Not implemented');
+    const taskIndex = this.tasks.findIndex((t) => t?.id === id);
+    if (taskIndex === -1) throw new NotFoundException('Task not found');
+    this.tasks.splice(taskIndex, 1);
   }
 }
