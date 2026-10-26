@@ -1,4 +1,11 @@
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 import { Task } from '../entities/task.entity.js';
 
 /**
@@ -10,14 +17,19 @@ import { Task } from '../entities/task.entity.js';
  */
 export class UpdateTaskDto {
   @IsString()
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
+  @Length(3, 100)
+  @Matches(/\S/, {
+    message: 'title must not be whitespace-only',
+  })
   title?: Task['title'];
 
   @IsString()
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
+  @MaxLength(500)
   description?: Task['description'];
 
   @IsBoolean()
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
   completed?: Task['completed'];
 }

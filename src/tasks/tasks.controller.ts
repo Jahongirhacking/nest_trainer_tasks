@@ -6,10 +6,10 @@ import {
   HttpCode,
   HttpStatus,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
 } from '@nestjs/common';
+import { ParsePositiveIntPipe } from '../common/pipes/parse-positive-int.pipe.js';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
@@ -42,14 +42,14 @@ export class TasksController {
   }
 
   @Get(':id')
-  findOne(@Param('id', new ParseIntPipe()) id: number): Task {
+  findOne(@Param('id', ParsePositiveIntPipe) id: number): Task {
     // TODO: Implement the controller endpoint (GET /tasks/:id).
     return this.tasksService.findOne(id);
   }
 
   @Patch(':id')
   update(
-    @Param('id', new ParseIntPipe()) id: number,
+    @Param('id', ParsePositiveIntPipe) id: number,
     @Body() dto: UpdateTaskDto,
   ): Task {
     // TODO: Implement the controller endpoint (PATCH /tasks/:id).
@@ -58,7 +58,7 @@ export class TasksController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', new ParseIntPipe()) id: number): void {
+  remove(@Param('id', ParsePositiveIntPipe) id: number): void {
     // TODO: Implement the controller endpoint (DELETE /tasks/:id).
     return this.tasksService.remove(id);
   }

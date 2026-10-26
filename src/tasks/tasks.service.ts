@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
@@ -44,6 +48,12 @@ export class TasksService {
 
   update(id: number, dto: UpdateTaskDto): Task {
     // TODO: Implement task update.
+    if (
+      typeof dto !== 'object' ||
+      dto === null ||
+      !Object.values(dto).some((value) => value !== undefined)
+    )
+      throw new BadRequestException('Validation Error');
     const task = this.findOne(id);
     Object.entries(dto).forEach(([key, value]) => {
       if (value !== undefined) {

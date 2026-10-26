@@ -1,4 +1,12 @@
-import { IsOptional, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsDefined,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 import { Task } from '../entities/task.entity.js';
 
 /**
@@ -8,10 +16,17 @@ import { Task } from '../entities/task.entity.js';
  *       decorators that enforce the rules in ASSIGNMENT.md.
  */
 export class CreateTaskDto {
+  @IsDefined()
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Length(3, 100)
+  @Matches(/\S/, {
+    message: 'title must not be whitespace-only',
+  })
   title: Task['title'];
 
   @IsString()
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
+  @MaxLength(500)
   description?: Task['description'];
 }
