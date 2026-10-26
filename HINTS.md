@@ -1,83 +1,57 @@
-# Hints
+# Hints – Task 2
 
-Read progressively. Try the assignment first; open the next level only when you are stuck.
-
----
-
-## Level 1 – Conceptual hints
-
-- A **module** (`@Module`) groups related building blocks. It lists `controllers` and `providers`, and may `imports` other modules.
-- A **provider** is anything Nest can inject. A class marked `@Injectable()` and listed in `providers` becomes a provider.
-- **Constructor injection**: when you declare a constructor parameter typed with a provider class, Nest creates/reuses the instance and passes it in. `private readonly x: X` in the constructor parameter list both declares and assigns a field.
-- A **controller** (`@Controller('prefix')`) maps HTTP requests to methods with `@Get`, `@Post`, `@Patch`, `@Delete`.
-- Request data is extracted with parameter decorators: `@Param`, `@Body`.
-- A **pipe** transforms or validates incoming values. Nest ships `ParseIntPipe` and `ValidationPipe`.
-- `ValidationPipe` works with **DTO classes** decorated by `class-validator` (`@IsString`, `@MinLength`, `@MaxLength`, `@IsOptional`, `@IsBoolean`, …). The class must exist at runtime, which is why DTOs are classes and not interfaces.
-- `class-transformer`'s `@Transform` can change a value before validation runs.
-- `ValidationPipe` options worth reading about: `whitelist`, `forbidNonWhitelisted`, `transform`.
-- `@HttpCode()` changes the default status code of a route (POST defaults to 201, others to 200).
-- Nest ships exception classes such as `NotFoundException` and `BadRequestException`; throwing one produces the matching HTTP response automatically.
-- Look at the Nest docs pages: Modules, Controllers, Providers, Pipes, Validation, Exception filters.
+Read progressively. Try the assignment first and open the next level only when you are stuck.
 
 ---
 
-## Level 2 – Structural hints
+## Level 1 – Conceptual
 
-- **TasksModule**: declares the controller and the service, nothing else. **AppModule**: only imports `TasksModule`.
-- **DTOs**: contain only the shape of the data plus validation decorators. No logic. `UpdateTaskDto` has the same rules as `CreateTaskDto` for the shared fields, but every property is optional. Think about what "optional" should mean for a value of `null`.
-- **Global pipe**: configure `ValidationPipe` once, in `configureApp()`. Think about which option turns unknown properties into an error rather than silently dropping them.
-- **Controller** responsibilities: routing, extracting `id`/body, parsing the id, choosing the status code, calling the service. Nothing else.
-- **Service** responsibilities: the array, the id counter, creating the task object (defaults and timestamps), finding, updating, deleting, and throwing `NotFoundException`.
-- **Id validation**: decide where "positive integer" is checked. Compare what `ParseIntPipe` accepts with what the assignment demands (`0`, `-1`).
-- **Empty PATCH body**: decide where it should be detected – validation layer, controller, or service – and justify the choice. Which layer owns "input shape" vs "business rules"?
-- **Partial update**: merge only the properties that were actually provided; be careful with properties that exist on an object but have the value `undefined`.
-- **Returning data**: think about whether returning a stored object directly lets callers mutate your storage.
-- **DELETE**: nothing to return; make sure the response status and body match the spec.
-- Implementation order that works well: module wiring → service → controller → DTOs → global pipe → edge cases (ids, empty PATCH).
+- **`ValidationPipe`** is a pipe: it receives the raw value of a handler parameter, turns it into an instance of the parameter's class, validates it, and throws a `BadRequestException` if validation fails. It only acts on parameters that have a class type (a DTO *class*, not an interface).
+- **class-transformer** converts plain JSON into class instances (`plainToInstance`) and lets you change values on the way (`@Transform`). **class-validator** reads decorators from the instance and produces `ValidationError`s. The order is always: transform, then validate.
+- A **Create DTO** describes everything required to make a resource. An **Update DTO** describes a *partial* change: everything optional, but whatever *is* present must obey the same rules as on creation.
+- Server-controlled fields (`id`, `createdAt`, `completed` on creation) are protected by **not being part of the DTO** plus a pipe setting that refuses undeclared properties, not by checking them by hand.
+- **HTTP exceptions** (`BadRequestException`, `NotFoundException`, …) are how Nest code says "this request cannot succeed": throwing one makes Nest send the matching status and body. Returning an object with an `error` key from a handler is not the same thing: that is a `200`.
+- Read the Nest docs: *Validation*, *Pipes*, *Exception filters*, and the class-validator README (`ValidateIf`, `IsOptional`, `Transform`).
 
 ---
 
-## Level 3 – Debugging hints
+## Level 2 – Structural
 
-**Dependency injection**
-- `Nest can't resolve dependencies of the TasksController` → the service is not in `providers`, or the constructor parameter has no type, or the class is not `@Injectable()`.
-- `this.tasksService is undefined` → you forgot the constructor, or you pass a method as a callback and lost `this`.
-- Never `new TasksService()`: you'd bypass the container and tests that substitute the service will break.
-- `import type { TasksService }` removes the runtime reference that DI needs. Use a regular import for injected classes.
+- **Where does validation belong?** Body rules → DTO classes plus the global pipe. Route parameter rules → a pipe on `@Param`. "Does this task exist?" → the service. Mixing these is what the architecture review looks for.
+- **Reusing rules.** Compare the options before picking one: a shared base class, composing decorators into one custom decorator, or the mapped-type helpers (`PartialType`, `PickType`, … from `@nestjs/mapped-types`/`@nestjs/swagger`; check what is already installed and what adding a dependency costs). Each has trade-offs for "optional but not `null`" and for the empty-object rule. Decide, then be able to say why.
+- **Body vs. parameter validation.** A body is validated as a whole object against a class; a route parameter is a single string that must be *parsed* (to a number) and *checked* (positive). Look at what the built-in parsing pipes check and, equally important, what they do not.
+- **Filter vs. service exception.** A service exception says *what went wrong in the domain* (`NotFoundException`). An exception filter runs *after* an exception was thrown and decides *how it is rendered* in the HTTP response. A filter must not decide whether a request is valid. Ask yourself whether you need one at all: where is the error body for a validation failure actually built? Is there a hook closer to that place?
+- Your service must stay HTTP-agnostic. If you write `@Req()`/`@Res()` in it, something is in the wrong layer.
 
-**DTO validation**
-- Nothing is validated → the DTO has no decorators, or the controller parameter is typed with an `interface`/`import type` instead of the class.
-- With `import type { CreateTaskDto }` the pipe cannot see the class. Use a normal import for DTOs used in decorated signatures.
-- `@IsOptional()` skips *all* validators when the value is `undefined` **or `null`**. A test sends `null`; check whether your validator still rejects it.
-- A whitespace-only or padded title: validators see the raw string unless you transform it first. Check the order of `@Transform` and the validators.
-- Compiled class fields may exist with the value `undefined` after transformation; this matters for "empty body" checks.
+---
 
-**Global ValidationPipe configuration**
-- Pipe registered in `main.ts` only → E2E tests use `configureApp`, so they never see it. Register it in `configureApp` (or via `APP_PIPE`).
-- Registered twice → duplicate work, confusing behavior.
-- Unknown properties silently accepted → missing option; silently *stripped* is not the same as *rejected*.
-- Without `transform: true` route params and bodies are not converted to the declared types.
+## Level 3 – Debugging
 
-**Route parameters**
-- `@Param('id')` is always a string until a pipe converts it.
-- `ParseIntPipe` accepts `-1` and `0`; the assignment does not.
-- Route order matters only with overlapping paths; here it does not, but keep `:id` routes after the static ones as a habit.
-- `Number('')` is `0`, `Number('1.5')` is `1.5`, `parseInt('1abc')` is `1` – be careful with lenient parsing.
+**Optional fields**
+- `@IsOptional()` skips *all* validators when the value is `undefined` **or `null`**. Is that what the spec says about `null`? Look for a decorator that skips only on a condition you control.
+- A field that is optional in the update DTO must still be fully validated when it is present, including falsy values: `completed: false` is a value.
+- With class fields and `useDefineForClassFields`, a DTO instance can have *own properties set to `undefined`* for fields the client never sent. Think about what that does to "is this object empty?" checks (`Object.keys`, `Object.values`, `Object.entries`).
 
-**HTTP exceptions**
-- Returning `null`/`undefined` for a missing task gives `200`/empty. Throw `NotFoundException` instead.
-- Throw exceptions from the service (it knows the task is missing), not from a controller `if`.
-- DELETE returning `200` with a body → missing `@HttpCode`.
-- Don't catch exceptions just to rethrow them.
+**Unknown properties accepted**
+- `whitelist` only *strips*; `forbidNonWhitelisted` is what turns stripping into an error, and it needs `whitelist: true`.
+- A property is "known" only if it has **at least one class-validator decorator**. A declared property without decorators is still considered unknown.
+- The pipe only runs if it is registered where the application under test sees it. Tests use `configureApp(app)`: a pipe created anywhere else (or only in `main.ts`) is invisible to them.
+- A parameter typed as an interface, a `type` alias, or `any` has no runtime metadata, so the pipe has nothing to validate against.
 
-**PATCH validation**
-- Every property is optional, but the *body* must contain at least one allowed property.
-- `{ "completed": "true" }` must be rejected: no implicit conversion should make a string a boolean.
-- Test your merge: sending only `completed` must not erase `title`.
-- `id` / `createdAt` must be *rejected*, not silently ignored.
+**Wrong status codes**
+- `ParseIntPipe` alone accepts `0` and `-1`. A `404` for `0` means nothing checked positivity.
+- A `404` for a malformed id usually means the pipe order is wrong, or the lookup happens before validation. Parameter and body pipes run before the handler body.
+- A `500` almost always means a plain `Error` (or a `TypeError` on `undefined`) escaped instead of a Nest exception.
+- A `200` on `DELETE` instead of `204` is a `@HttpCode` question; a `201` on `PATCH` is not possible unless something is badly wrong.
+- With global `transform: true`, the pipe also converts primitive route params to the declared TS type. Values like `"1e2"` or `"0x10"` can become valid numbers before your own pipe sees them, which is why the test-suite deliberately does not include them. Know why.
 
-**Unit-test isolation**
-- Service tests create a fresh module each time; state stored in a module-level variable or a `static` field leaks between tests and breaks them.
-- Controller tests replace the service with a mock; if they fail because of the service's internals, your controller is doing too much.
-- A failing test that passes alone but fails with others means shared state.
-- Read the failing assertion first; it states the expected value.
+**Error shape**
+- `ValidationPipe`'s default error is `message: string[]` with no field names. Check what options the pipe exposes for building the exception, and what the exception's constructor accepts as a body.
+- The default 404 body already has `statusCode`, `message` and `error`. Do not rewrite what already conforms.
+- If you write a filter with `@Catch()` (no argument), you also catch non-HTTP errors. What should happen to those?
+
+**Tests that pass alone but fail together**
+- Each test builds a new application and therefore a new in-memory store. If a test passes alone and fails in a group, your code probably keeps state at module level (a `let tasks = []` outside the class, a static counter), so state leaks between apps in the same process.
+- Hard-coded ids (`/tasks/1`) work only when ids are predictable. Generated ids must not be assumed; the tests ask the API for ids.
+- Random ids can collide in a long suite; if ids ever repeat, think about what generates them.
+- Run one file at a time (`pnpm vitest run --config ./vitest.config.e2e.ts test/task2/validation.e2e-spec.ts`) and a single test with `-t "<name>"` to isolate.

@@ -1,5 +1,8 @@
-# NestJS Training – Assignment 1: Task Management API
+# NestJS Training – Task Management API
 
-Start with [ASSIGNMENT.md](ASSIGNMENT.md). Hints are in [HINTS.md](HINTS.md) (read them level by level), and the grading rubric is in [EVALUATION.md](EVALUATION.md).
+Current assignment: **Task 2 – Production-Quality Validation and Error Handling**.
 
-Requires **Node.js 20+** (this project was set up with Node 22, see `.nvmrc`) and pnpm.
+- Start with [ASSIGNMENT.md](ASSIGNMENT.md). Hints are in [HINTS.md](HINTS.md) (read them level by level), and the grading rubric is in [EVALUATION.md](EVALUATION.md).
+- Task 1 documents are preserved in [docs/task_1/](docs/task_1/).
+
+Requires **Node.js 22** (see `.nvmrc`; Node 18 cannot run the toolchain) and pnpm.

@@ -1,187 +1,160 @@
-# Assignment 1 – Task Management API
+# Assignment 2 – Production-Quality Validation and Error Handling
 
-**Difficulty:** Medium  
-**Stack:** NestJS 12, TypeScript, class-validator, Vitest + Supertest, pnpm
+**Difficulty:** Medium+  
+**Builds on:** Assignment 1 (Task Management API, see [docs/task_1/](docs/task_1/ASSIGNMENT.md))  
+**Stack:** NestJS 12, TypeScript, class-validator, class-transformer, Vitest + Supertest, pnpm
 
 ## 1. Learning objectives
 
-After this assignment you should be able to:
+- `ValidationPipe` and how it uses `class-validator` and `class-transformer`
+- DTO design: **create vs. update** DTOs and how to share rules between them
+- `whitelist` / `forbidNonWhitelisted` and protecting server-controlled fields
+- Route parameter parsing and validation (pipes)
+- Validation exceptions and correct HTTP status codes
+- A **consistent API error format** (and deciding whether an exception filter is justified)
+- Unit and E2E testing of all of the above
 
-- Organize an application into **modules** and import one module into another.
-- Write **controllers** that only handle HTTP concerns.
-- Write **services** that own business logic and state.
-- Use **dependency injection** (constructor injection, `@Injectable()`, providers).
-- Describe request payloads with **DTOs** and validate them with `class-validator` and a global `ValidationPipe`.
-- Use correct **HTTP status codes** and NestJS **exceptions**.
-- Write and read **unit** and **end-to-end** tests.
+No authentication, database, Redis or other infrastructure is added. Tasks stay in memory.
 
-No database, Docker, Redis or authentication: tasks live **in memory** inside the service.
+## 2. Prerequisite: Task 1 must work
 
-## 2. The domain
+Task 2 is tested on top of the Task 1 CRUD API. Run the gate first:
 
-A task has:
+```bash
+pnpm test:e2e:task1-gate
+```
 
-| Property      | Type    | Notes                              |
-| ------------- | ------- | ---------------------------------- |
-| `id`          | number  | unique positive integer, server-generated |
-| `title`       | string  | required                           |
-| `description` | string  | optional                           |
-| `completed`   | boolean | defaults to `false`                |
-| `createdAt`   | Date    | set by the server on creation      |
+If it fails, finish Task 1 first (module wiring, controller routes and parameter decorators, DI). Failures in the `[Task 2]` suites are not meaningful until the gate is green. Test names tell you where a failure belongs:
 
-The `Task` type is already defined in `src/tasks/entities/task.entity.ts`.
+| Prefix in test name | Meaning |
+| ------------------- | ------- |
+| `[Task 1 prerequisite]` | the Task 1 foundation (app boots, five routes work on valid input) |
+| `[Task 2]` | the new validation / error-handling requirements |
+| *(no prefix)* | the original Task 1 suites (`test/tasks.e2e-spec.ts`, `src/tasks/tasks.*.spec.ts`), kept as regression tests |
 
-## 3. Endpoints
+## 3. Functional requirements
 
-### A. `POST /tasks` – create a task
+Endpoints and domain model are unchanged from Task 1 (`id`, `title`, `description?`, `completed`, `createdAt`).
 
-Request:
+### A. `POST /tasks`
+
+| Property | Rule |
+| -------- | ---- |
+| `title` | required; string; **3–100 characters after trimming**; whitespace-only is invalid; `null`, missing or non-string is invalid |
+| `description` | optional; if supplied must be a string of at most 500 characters; an explicit `null` is **rejected** |
+| `completed`, `id`, `createdAt` | **must not be accepted** from the client. The server sets `completed = false` |
+| any other property | validation error; never silently accepted or stored |
+
+`201 Created` on success, `400 Bad Request` on validation failure. A rejected request stores nothing.
+
+### B. `PATCH /tasks/:id`
+
+Allowed properties: `title`, `description`, `completed`; each is optional on its own.
+
+- `title` and `description` follow the same rules as creation.
+- `completed`, if supplied, must be a boolean (`"true"`, `1`, `0`, `null` are invalid).
+- `null` is rejected for all three properties.
+- `id`, `createdAt` and unknown properties are rejected.
+- An **empty object** `{}` is rejected.
+- An update with only `completed`, only `title`, or only `description` is valid.
+
+`200 OK` with the updated task, `400` for an invalid body or id, `404` if the task does not exist. Properties that were not sent stay unchanged. A rejected request changes nothing.
+
+> Order of checks: a malformed id or an invalid body is a `400` **even if** the task does not exist. `404` is only for a valid request that targets a missing task.
+
+### C. Route parameters (`/tasks/:id`)
+
+- `:id` must be a **positive integer**.
+- Reject `0`, negative values, decimals and non-numeric/malformed values (`abc`, `1.5`, `-1`, `1abc`, …) with `400`.
+- A valid positive integer that matches no task is `404`. Never conflate the two.
+- Applies to `GET`, `PATCH` and `DELETE`.
+
+### D. Error response schema
+
+Every expected client error (validation failures, malformed ids, missing tasks) uses this JSON shape:
 
 ```json
 {
-  "title": "Learn NestJS modules",
-  "description": "Understand module boundaries and dependency injection"
+  "statusCode": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "errors": [
+    { "field": "title", "messages": ["title must be longer than or equal to 3 characters"] },
+    { "field": "priority", "messages": ["property priority should not exist"] }
+  ]
 }
 ```
 
-Response `201 Created`:
+| Field | Type | Rules |
+| ----- | ---- | ----- |
+| `statusCode` | number | equals the HTTP status of the response |
+| `error` | string | the standard HTTP reason phrase for that status (`"Bad Request"`, `"Not Found"`, `"Conflict"`, …): a stable category |
+| `message` | string | non-empty, human-readable summary. **A string, not an array.** Tests never compare its text |
+| `errors` | array, optional | present when the failure is attributable to specific request-body fields. Each entry is exactly `{ "field": string, "messages": string[] }` with at least one message. For an unknown property, `field` is that property's name. Omit it (or leave it out entirely) for errors that name no field: malformed ids, `404`, an empty PATCH body |
 
-```json
-{
-  "id": 1,
-  "title": "Learn NestJS modules",
-  "description": "Understand module boundaries and dependency injection",
-  "completed": false,
-  "createdAt": "2025-01-01T12:00:00.000Z"
-}
-```
+Rules:
 
-- `id`, `completed` and `createdAt` are generated by the server.
-- If the client sends `id`, `completed` or `createdAt` (or any other unknown property) the request is rejected with `400`.
+- Never include stack traces, file paths or internal details.
+- Never return a `2xx` response that embeds an error object.
+- Successful responses keep their Task 1 format (bare task object / array / `204` empty).
 
-### B. `GET /tasks` – list tasks
+### E. Exception handling
 
-`200 OK` with an array of all tasks, or `[]` if there are none.
+- Invalid input ⇒ `400`; missing task ⇒ `404`; both thrown as Nest `HttpException`s from the appropriate layer.
+- Unexpected (non-HTTP) errors ⇒ `500`, never a success response, never leaking their message or stack.
+- Any `HttpException` keeps its original status code (e.g. a `409` stays `409`).
+- Do not unnecessarily replace Nest's standard exception behavior.
 
-### C. `GET /tasks/:id` – get one task
+**Is a custom exception filter required?** That is part of your design decision and a review item. Nest's default body is already `{ statusCode, message, error }`, so the only gap against the schema above is the field-level `errors` list and a string `message`. A scaffold exists at `src/common/filters/http-exception.filter.ts`; you may implement it, close the gap another way, or both, but you must be able to defend the choice. The tests only check observable behavior and work with any of these designs. Do not build a large global exception framework.
 
-- `200 OK` with the task.
-- `404 Not Found` if no task has that id.
-- `400 Bad Request` if `:id` is not a positive integer (`abc`, `0`, `-1`, `1.5`, …).
+## 4. Architecture requirements
 
-### D. `PATCH /tasks/:id` – update a task
+- **DTOs** hold the validation rules. Do not copy-paste every rule between `CreateTaskDto` and `UpdateTaskDto` without thinking about maintainability. Choose and justify a reuse strategy.
+- **Global `ValidationPipe`** configured in `src/app.setup.ts` (called by `main.ts` and every E2E test) so unexpected properties are rejected. A pipe already exists from Task 1: review it, do not assume it is sufficient.
+- **Controller**: HTTP concerns only; uses Nest's parameter parsing; no hand-written validation inside route methods; no per-route error formatting.
+- **Service**: business logic; throws Nest exceptions for expected failures; knows nothing about requests/responses.
+- **Filter** (if any): HTTP error formatting only; no business validation; does not swallow unexpected errors.
+- Keep the method names and signatures listed in [docs/task_1/ASSIGNMENT.md](docs/task_1/ASSIGNMENT.md), section 6: the tests call them.
 
-Allowed body properties (all optional): `title`, `description`, `completed`.
+## 5. Where to work
 
-```json
-{ "completed": true }
-```
-
-- `200 OK` with the updated task. Properties that were not sent stay unchanged.
-- `404 Not Found` if the task does not exist.
-- `400 Bad Request` for a malformed id, an invalid value, an **empty body**, or **any unknown property** (including `id` and `createdAt`).
-
-### E. `DELETE /tasks/:id` – delete a task
-
-- `204 No Content` (empty body) on success.
-- `404 Not Found` if the task does not exist.
-- `400 Bad Request` for a malformed id.
-
-## 4. Validation rules
-
-| Property      | Rule |
-| ------------- | ---- |
-| `title`       | required on create; must be a string; **3–100 characters after trimming**; whitespace-only is invalid |
-| `description` | optional; must be a string; at most 500 characters |
-| `completed`   | (PATCH only) must be a boolean – `"true"`, `1`, `null` are invalid |
-| any other property | rejected with `400` |
-| `:id`         | positive integer |
-
-Invalid input must produce a `400` response with Nest's standard error body (`statusCode`, `message`, `error`). Invalid values must never be stored, and a rejected request must not change any state.
-
-## 5. Architecture requirements
-
-- `TasksModule` registers `TasksController` and `TasksService`; `AppModule` imports `TasksModule`.
-- `TasksController` handles routes, extracts params/bodies and **delegates** to `TasksService`. It holds no tasks and no business rules.
-- `TasksService` owns the in-memory storage, ID generation and not-found handling (NestJS exceptions).
-- `TasksService` is injected into the controller via the **constructor**. Never write `new TasksService()`.
-- Separate `CreateTaskDto` and `UpdateTaskDto` classes.
-- `ValidationPipe` is configured **globally** in `src/app.setup.ts` (called by both `main.ts` and the E2E tests), or alternatively through `APP_PIPE`.
-- No extra abstractions: no repositories, interfaces for the service, factories or extra modules.
-
-## 6. Starter code
-
-Everything marked `TODO` is yours to implement. The method bodies that `throw new Error('Not implemented')` are **temporary scaffolding** so the project compiles – replace all of them.
-
-| File | What you do |
+| File | Task 2 work |
 | ---- | ----------- |
-| `src/tasks/tasks.module.ts` | register controller + service |
-| `src/tasks/dto/create-task.dto.ts` | properties + validation |
-| `src/tasks/dto/update-task.dto.ts` | properties + validation |
-| `src/tasks/tasks.service.ts` | storage + all business logic |
-| `src/tasks/tasks.controller.ts` | routes, DI, status codes, pipes |
-| `src/app.setup.ts` | global `ValidationPipe` |
+| `src/tasks/dto/create-task.dto.ts` | complete the validation rules |
+| `src/tasks/dto/update-task.dto.ts` | complete the rules, reject `null` and `{}` |
+| `src/tasks/tasks.controller.ts` | route-param parsing/validation (and Task 1 leftovers) |
+| `src/app.setup.ts` | review pipe configuration, register the filter if you use one |
+| `src/common/filters/http-exception.filter.ts` | optional filter scaffold |
+| `src/tasks/tasks.service.ts` | exceptions for expected failures |
 
-**Keep these names and signatures** (the tests call them):
+## 6. Tests
 
-- Service: `create(dto)`, `findAll()`, `findOne(id: number)`, `update(id: number, dto)`, `remove(id: number)`
-- Controller: `create(dto)`, `findAll()`, `findOne(id: number)`, `update(id: number, dto)`, `remove(id: number)`
-- `configureApp(app)` exported from `src/app.setup.ts`
+| Command | What it runs |
+| ------- | ------------ |
+| `pnpm test:e2e:task1-gate` | `[Task 1 prerequisite]` smoke tests |
+| `pnpm test:task2` | DTO unit tests (`create-task.dto.spec.ts`, `update-task.dto.spec.ts`) |
+| `pnpm test:e2e:task2` | all `[Task 2]` + prerequisite E2E suites in `test/task2/` |
+| `pnpm test:e2e:task1` | the original Task 1 E2E suite (regression) |
+| `pnpm test` | all unit tests (Task 1 + Task 2) |
+| `pnpm test:e2e` | all E2E tests |
+| `pnpm lint` / `pnpm build` | static checks |
 
-The tests accept either synchronous or `async` methods. The service must throw `NotFoundException` for missing tasks.
+Requires Node 22 (`nvm use`, see `.nvmrc`); the toolchain does not run on Node 18.
 
-> The starter imports `TasksService` into the controller without using it yet, so `pnpm lint` shows one `no-unused-vars` warning. It disappears once you inject the service.
+Test layout:
 
-## 7. Commands
+- `src/tasks/dto/*.spec.ts`: DTO rules, using `plainToInstance` + `validate` with `whitelist` and `forbidNonWhitelisted`. Whether `{}` is rejected is checked over HTTP only, because the layer that enforces it is your choice.
+- `test/task2/validation.e2e-spec.ts`: POST/PATCH body validation through the real `configureApp()`.
+- `test/task2/route-params.e2e-spec.ts`: `:id` handling for GET/PATCH/DELETE.
+- `test/task2/error-handling.e2e-spec.ts`: error envelope, success formats, unexpected errors, status preservation.
+- `test/helpers/`: app factory, error-envelope assertions. Each test gets a fresh app, so tests are independent of order and of generated ids.
 
-Requires Node.js 20+ (`nvm use` picks up `.nvmrc`).
+Do not edit the tests to make your implementation pass. If you believe a test contradicts this specification, write down why before touching it.
 
-| Purpose | Command |
-| ------- | ------- |
-| Install dependencies | `pnpm install` |
-| Dev server (watch mode, http://localhost:3000) | `pnpm start:dev` |
-| Start once | `pnpm start` |
-| Unit tests | `pnpm test` |
-| Unit tests, watch mode | `pnpm test:watch` |
-| E2E tests | `pnpm test:e2e` |
-| Lint | `pnpm lint` |
-| Format | `pnpm format` |
-| Production build | `pnpm build` |
-| Run the production build | `pnpm start:prod` |
+## 7. Acceptance criteria
 
-**The initial test run is expected to fail**: all 24 unit tests and all 73 E2E tests fail on the untouched starter, because nothing is implemented. That is the correct starting point. `pnpm build` and `pnpm lint` should succeed (lint with the one warning above).
-
-Please do not edit the test files to make them pass. If you believe a test contradicts this specification, write down why and discuss it before changing anything.
-
-## 8. Acceptance criteria
-
-- `pnpm build` succeeds with no TypeScript errors.
-- `pnpm lint` reports no errors.
-- `pnpm test` and `pnpm test:e2e` are fully green, and no test is skipped or modified.
-- Manual check with `curl`/Postman matches section 3.
-- The architecture rules in section 5 are respected.
-
-## 9. Self-assessment checklist
-
-- [ ] `TasksModule` declares the controller and provider; `AppModule` imports it
-- [ ] The controller gets `TasksService` by constructor injection
-- [ ] The controller contains no array of tasks and no business rules
-- [ ] The service stores tasks in memory and generates unique ids
-- [ ] New tasks have `completed: false` and a server-side `createdAt`
-- [ ] `POST /tasks` returns 201
-- [ ] `GET /tasks` returns `[]` when empty
-- [ ] `GET /tasks/:id` returns 200 / 404 / 400 correctly
-- [ ] `PATCH` changes only the sent properties and returns 200
-- [ ] `PATCH` rejects `{}` and unknown properties
-- [ ] `DELETE` returns 204 with an empty body, then the task is gone
-- [ ] Title rules: string, trimmed length 3–100, not whitespace-only
-- [ ] Description rules: string, max 500
-- [ ] `completed` must be a boolean
-- [ ] Ids `abc`, `0`, `-1`, `1.5` return 400
-- [ ] Unknown properties (incl. `id`, `createdAt`, and `completed` on create) return 400
-- [ ] Global `ValidationPipe` is configured once
-- [ ] All unit and E2E tests pass without modifying them
-- [ ] `pnpm build` and `pnpm lint` are clean
-- [ ] I can explain every decorator I used and why
-
-Finally, see [EVALUATION.md](EVALUATION.md) for how the work is graded.
+1. `pnpm test:e2e:task1-gate`, `pnpm test`, `pnpm test:e2e`, `pnpm lint` and `pnpm build` all pass.
+2. Every rule in section 3 holds, including: no `null` accepted, no `{}` on PATCH, no `id`/`createdAt`/`completed` on POST, `0`/`-1`/`1.5`/`abc` ids rejected with `400`, missing tasks `404`.
+3. Every error response matches the schema in section 3.D.
+4. Validation rules are not needlessly duplicated, and each layer keeps its responsibility (section 4).
+5. You can explain every decision listed in [EVALUATION.md](EVALUATION.md).
