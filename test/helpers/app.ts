@@ -42,8 +42,13 @@ export async function createTask(
 ): Promise<TaskBody> {
   const res = await http(app)
     .post('/tasks')
-    .send({ title: 'A valid title', ...body })
-    .expect(201);
+    .send({ title: 'A valid title', ...body });
+  if (res.status !== 201) {
+    throw new Error(
+      `Test SETUP failed: POST /tasks with a valid body returned ${res.status} ` +
+        `${JSON.stringify(res.body)}. The test itself did not run; fix POST /tasks first.`,
+    );
+  }
   return res.body as TaskBody;
 }
 

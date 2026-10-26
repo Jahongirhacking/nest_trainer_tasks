@@ -5,6 +5,8 @@ import { configureApp } from './app.setup.js';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   configureApp(app);
-  await app.listen(process.env.PORT ?? 3000);
+  const PORT = process.env.PORT ?? 3000;
+  await app.listen(PORT);
+  console.log(`Server is running on http://localhost:${PORT}`);
 }
 await bootstrap();

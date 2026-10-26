@@ -20,10 +20,11 @@ export class TasksService {
   create(dto: CreateTaskDto): Task {
     // TODO: Implement task creation.
     const newTask = {
-      ...dto,
+      description: '',
       id: this.generateId(),
       createdAt: new Date(),
       completed: false,
+      ...dto,
     };
     this.tasks.push(newTask);
     return newTask;

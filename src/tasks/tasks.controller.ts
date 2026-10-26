@@ -1,4 +1,15 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
@@ -18,7 +29,8 @@ export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
 
   @Post()
-  create(dto: CreateTaskDto): Task {
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateTaskDto): Task {
     // TODO: Implement the controller endpoint (POST /tasks).
     return this.tasksService.create(dto);
   }
@@ -29,17 +41,24 @@ export class TasksController {
     return this.tasksService.findAll();
   }
 
-  findOne(id: number): Task {
+  @Get(':id')
+  findOne(@Param('id', new ParseIntPipe()) id: number): Task {
     // TODO: Implement the controller endpoint (GET /tasks/:id).
     return this.tasksService.findOne(id);
   }
 
-  update(id: number, dto: UpdateTaskDto): Task {
+  @Patch(':id')
+  update(
+    @Param('id', new ParseIntPipe()) id: number,
+    @Body() dto: UpdateTaskDto,
+  ): Task {
     // TODO: Implement the controller endpoint (PATCH /tasks/:id).
     return this.tasksService.update(id, dto);
   }
 
-  remove(id: number): void {
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', new ParseIntPipe()) id: number): void {
     // TODO: Implement the controller endpoint (DELETE /tasks/:id).
     return this.tasksService.remove(id);
   }

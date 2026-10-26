@@ -1,4 +1,4 @@
-import { IsString } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 import { Task } from '../entities/task.entity.js';
 
 /**
@@ -12,5 +12,6 @@ export class CreateTaskDto {
   title: Task['title'];
 
   @IsString()
-  description: Task['description'];
+  @IsOptional()
+  description?: Task['description'];
 }
