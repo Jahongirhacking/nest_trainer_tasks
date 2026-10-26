@@ -1,0 +1,16 @@
+import type { INestApplication } from '@nestjs/common';
+
+/**
+ * Application-wide configuration shared by `main.ts` AND the E2E tests,
+ * so the tests exercise exactly the same global setup as the real server.
+ *
+ * TODO: Register the global ValidationPipe here (see ASSIGNMENT.md, "DTOs").
+ *       It must strip/reject unexpected properties and reject invalid values.
+ *
+ * (Alternative: you may register the pipe with the APP_PIPE provider in
+ * AppModule instead. If you do, leave this function empty.)
+ */
+export function configureApp(app: INestApplication): void {
+  // TODO: app.useGlobalPipes(...)
+  void app;
+}
