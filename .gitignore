@@ -1,1 +1,26 @@
-node_modules
+cat >> .gitignore <<'EOF'
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+EOF
