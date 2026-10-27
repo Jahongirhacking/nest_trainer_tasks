@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { App } from 'supertest/types.js';
-import { createTask, createTestApp, http, missingId } from '../helpers/app.js';
-import { errorFields, expectApiError } from '../helpers/api-error.js';
+import { createTask, createTestApp, http, missingId } from '../app-helper.js';
+import { errorFields, expectApiError } from '../../helpers/api-error.js';
 
 const repeat = (n: number) => 'a'.repeat(n);
 

@@ -1,72 +1,47 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotImplementedException } from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
 
 /**
- * NOTE: every method body below is TEMPORARY SCAFFOLDING so the project
- * compiles. Each `throw` must be replaced by your real implementation.
- * Keep the method names and signatures: the tests depend on them.
+ * NOTE: every body below is TEMPORARY SCAFFOLDING (HTTP 501). The Task 1/2
+ * in-memory implementation was removed on purpose: Task 3 replaces the array
+ * with a TypeORM repository. Keep the method names and parameter order.
+ *
+ * TODO: Inject the Task repository with @InjectRepository(Task) (and whatever
+ *       you need to verify that the parent project exists).
+ * TODO: Never let the client set id, projectId, createdAt or updatedAt.
+ * TODO: Translate KNOWN database errors only; let everything else surface.
  */
 @Injectable()
 export class TasksService {
-  // TODO: Add the in-memory storage (and whatever you need for ID generation).
-  private readonly tasks: Task[] = [];
-
-  generateId() {
-    return Math.ceil(1_000_000 * Math.random());
+  create(_projectId: number, _dto: CreateTaskDto): Promise<Task> {
+    // TODO: 404 if the project does not exist; completed defaults to false.
+    throw new NotImplementedException('TasksService.create');
   }
 
-  create(dto: CreateTaskDto): Task {
-    // TODO: Implement task creation.
-    const newTask = {
-      description: '',
-      id: this.generateId(),
-      createdAt: new Date(),
-      completed: false,
-      ...dto,
-    };
-    this.tasks.push(newTask);
-    return newTask;
+  findAll(): Promise<Task[]> {
+    // TODO: all tasks, via a database query.
+    throw new NotImplementedException('TasksService.findAll');
   }
 
-  findAll(): Task[] {
-    // TODO: Implement listing all tasks.
-    return this.tasks;
+  findAllByProject(_projectId: number): Promise<Task[]> {
+    // TODO: 404 if the project does not exist; only that project's tasks.
+    throw new NotImplementedException('TasksService.findAllByProject');
   }
 
-  findOne(id: number): Task {
-    // TODO: Implement task lookup (throw the proper Nest exception if missing).
-    const task = this.tasks.find((t) => t?.id === id);
-    if (!task) throw new NotFoundException('Task not found');
-    return task;
+  findOne(_id: number): Promise<Task> {
+    // TODO: the task or NotFoundException.
+    throw new NotImplementedException('TasksService.findOne');
   }
 
-  update(id: number, dto: UpdateTaskDto): Task {
-    // TODO: Implement task update.
-    if (
-      typeof dto !== 'object' ||
-      dto === null ||
-      !Object.values(dto).some((value) => value !== undefined)
-    )
-      throw new BadRequestException('Validation Error');
-    const task = this.findOne(id);
-    Object.entries(dto).forEach(([key, value]) => {
-      if (value !== undefined) {
-        Object.assign(task, { [key]: value });
-      }
-    });
-    return task;
+  update(_id: number, _dto: UpdateTaskDto): Promise<Task> {
+    // TODO: reject an empty body (400); 404 if missing; no project reassignment.
+    throw new NotImplementedException('TasksService.update');
   }
 
-  remove(id: number): void {
-    // TODO: Implement task deletion.
-    const taskIndex = this.tasks.findIndex((t) => t?.id === id);
-    if (taskIndex === -1) throw new NotFoundException('Task not found');
-    this.tasks.splice(taskIndex, 1);
+  remove(_id: number): Promise<void> {
+    // TODO: 404 if missing; must not touch the parent project.
+    throw new NotImplementedException('TasksService.remove');
   }
 }

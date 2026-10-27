@@ -1,65 +1,52 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  Patch,
-  Post,
-} from '@nestjs/common';
-import { ParsePositiveIntPipe } from '../common/pipes/parse-positive-int.pipe.js';
+import { Injectable, NotImplementedException } from '@nestjs/common';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import type { Task } from './entities/task.entity.js';
 import { TasksService } from './tasks.service.js';
 
 /**
- * NOTE: method bodies are TEMPORARY SCAFFOLDING. Keep the method names and
- * parameter order: the controller unit tests call them directly.
+ * NOTE: scaffolding. Keep the method names and parameter order: the
+ * controller unit tests call them directly.
  *
- * TODO: Add the route prefix to @Controller(), the HTTP method/route
- *       decorators, parameter decorators (@Param, @Body, pipes) and the
- *       status-code decorators to every method.
+ * Routes (ASSIGNMENT.md, "API"):
+ *   POST   /projects/:projectId/tasks   -> create
+ *   GET    /projects/:projectId/tasks   -> findAllByProject
+ *   GET    /tasks                       -> findAll
+ *   GET    /tasks/:id                   -> findOne
+ *   PATCH  /tasks/:id                   -> update
+ *   DELETE /tasks/:id                   -> remove
+ *
+ * TODO: Replace @Injectable() with @Controller(...) (the two route prefixes
+ *       differ: choose how to express that, e.g. an empty prefix with full
+ *       paths on each method, or a second controller), inject TasksService
+ *       and add every decorator/pipe/status code.
  */
-@Controller('tasks')
+@Injectable()
 export class TasksController {
-  // TODO: Inject TasksService through the constructor.
+  // TODO: inject TasksService through the constructor.
   constructor(private readonly tasksService: TasksService) {}
 
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreateTaskDto): Task {
-    // TODO: Implement the controller endpoint (POST /tasks).
-    return this.tasksService.create(dto);
+  create(_projectId: number, _dto: CreateTaskDto): Promise<Task> {
+    throw new NotImplementedException('TasksController.create');
   }
 
-  @Get()
-  findAll(): Task[] {
-    // TODO: Implement the controller endpoint (GET /tasks).
-    return this.tasksService.findAll();
+  findAllByProject(_projectId: number): Promise<Task[]> {
+    throw new NotImplementedException('TasksController.findAllByProject');
   }
 
-  @Get(':id')
-  findOne(@Param('id', ParsePositiveIntPipe) id: number): Task {
-    // TODO: Implement the controller endpoint (GET /tasks/:id).
-    return this.tasksService.findOne(id);
+  findAll(): Promise<Task[]> {
+    throw new NotImplementedException('TasksController.findAll');
   }
 
-  @Patch(':id')
-  update(
-    @Param('id', ParsePositiveIntPipe) id: number,
-    @Body() dto: UpdateTaskDto,
-  ): Task {
-    // TODO: Implement the controller endpoint (PATCH /tasks/:id).
-    return this.tasksService.update(id, dto);
+  findOne(_id: number): Promise<Task> {
+    throw new NotImplementedException('TasksController.findOne');
   }
 
-  @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParsePositiveIntPipe) id: number): void {
-    // TODO: Implement the controller endpoint (DELETE /tasks/:id).
-    return this.tasksService.remove(id);
+  update(_id: number, _dto: UpdateTaskDto): Promise<Task> {
+    throw new NotImplementedException('TasksController.update');
+  }
+
+  remove(_id: number): Promise<void> {
+    throw new NotImplementedException('TasksController.remove');
   }
 }

@@ -1,57 +1,45 @@
-# Hints – Task 2
+# Hints – Assignment 3 (read level by level)
 
-Read progressively. Try the assignment first and open the next level only when you are stuck.
+## Level 1 – Concepts
 
----
+- **ORM**: maps rows to objects, so you work with classes instead of hand-written SQL strings. TypeORM does this with decorators.
+- **Entity**: a class that describes one table (columns, keys, relations). It is *not* a DTO: the entity describes storage, the DTO describes what a client may send.
+- **Repository**: an object bound to one entity that offers `find…`, `save`, `delete`, … It keeps data access out of your controllers and makes services testable (swap it for a fake).
+- **Injection**: `TypeOrmModule.forFeature([Entity])` registers a repository provider; `@InjectRepository(Entity)` asks Nest for it. The module that owns a service must import the `forFeature` of every entity that service injects.
+- **Many-to-One / One-to-Many**: many tasks point at one project. The *Many-to-One* side (task) owns the foreign key column; the *One-to-Many* side (project) is the inverse and has no column of its own.
+- **DTO validation vs. constraints**: a DTO protects the API; a constraint protects the data from *every* writer (bugs, scripts, concurrent requests). You need both. A pre-check query can be wrong a millisecond later; a unique index can't.
+- **Migrations**: versioned, reviewable, reversible schema changes. `synchronize` guesses and can destroy data.
+- **Persistence**: an array lives and dies with the process and is private to it; a database outlives restarts and is shared by many requests/instances, so concurrency becomes your problem.
 
-## Level 1 – Conceptual
+## Level 2 – Structure
 
-- **`ValidationPipe`** is a pipe: it receives the raw value of a handler parameter, turns it into an instance of the parameter's class, validates it, and throws a `BadRequestException` if validation fails. It only acts on parameters that have a class type (a DTO *class*, not an interface).
-- **class-transformer** converts plain JSON into class instances (`plainToInstance`) and lets you change values on the way (`@Transform`). **class-validator** reads decorators from the instance and produces `ValidationError`s. The order is always: transform, then validate.
-- A **Create DTO** describes everything required to make a resource. An **Update DTO** describes a *partial* change: everything optional, but whatever *is* present must obey the same rules as on creation.
-- Server-controlled fields (`id`, `createdAt`, `completed` on creation) are protected by **not being part of the DTO** plus a pipe setting that refuses undeclared properties, not by checking them by hand.
-- **HTTP exceptions** (`BadRequestException`, `NotFoundException`, …) are how Nest code says "this request cannot succeed": throwing one makes Nest send the matching status and body. Returning an object with an `error` key from a handler is not the same thing: that is a `200`.
-- Read the Nest docs: *Validation*, *Pipes*, *Exception filters*, and the class-validator README (`ValidateIf`, `IsOptional`, `Transform`).
-
----
-
-## Level 2 – Structural
-
-- **Where does validation belong?** Body rules → DTO classes plus the global pipe. Route parameter rules → a pipe on `@Param`. "Does this task exist?" → the service. Mixing these is what the architecture review looks for.
-- **Reusing rules.** Compare the options before picking one: a shared base class, composing decorators into one custom decorator, or the mapped-type helpers (`PartialType`, `PickType`, … from `@nestjs/mapped-types`/`@nestjs/swagger`; check what is already installed and what adding a dependency costs). Each has trade-offs for "optional but not `null`" and for the empty-object rule. Decide, then be able to say why.
-- **Body vs. parameter validation.** A body is validated as a whole object against a class; a route parameter is a single string that must be *parsed* (to a number) and *checked* (positive). Look at what the built-in parsing pipes check and, equally important, what they do not.
-- **Filter vs. service exception.** A service exception says *what went wrong in the domain* (`NotFoundException`). An exception filter runs *after* an exception was thrown and decides *how it is rendered* in the HTTP response. A filter must not decide whether a request is valid. Ask yourself whether you need one at all: where is the error body for a validation failure actually built? Is there a hook closer to that place?
-- Your service must stay HTTP-agnostic. If you write `@Req()`/`@Res()` in it, something is in the wrong layer.
-
----
+- `ProjectsModule`: controller + service + `TypeOrmModule.forFeature([Project])`. `TasksModule`: controller + service + `forFeature([Task])`. Tasks must know whether a project exists: either export `ProjectsService` from `ProjectsModule` and import that module, or also register `Project` in `forFeature` of `TasksModule`. Pick one and be able to justify it. Don't make the two modules import each other.
+- `autoLoadEntities: true` is already on, so `forFeature` registration is what makes TypeORM aware of an entity.
+- Keep `entities/` (storage) and `dto/` (API) separate; DTOs may use `Entity['field']` types, entities never import DTOs.
+- Relation sketch (names only): on Task a `@ManyToOne` to Project together with an explicit `projectId` column bound via `@JoinColumn`; on Project a `@OneToMany` back. Decide the `onDelete` behaviour deliberately.
+- Column types: use explicit lengths (`varchar(100)`), nullable description, `@CreateDateColumn` / `@UpdateDateColumn`, a boolean with a default.
+- Service shape: each method = one clear repository call + translating "no row" to `NotFoundException`. `findOne` returns `null`, `findOneByOrFail` throws – choose consciously.
+- Deleting a project: three honest options – (a) count tasks first then delete, (b) just delete and translate the FK error, (c) both. Think about which stays correct under concurrency.
+- Update: `repository.update()` returns only an affected count; `save()`/`preload()` returns the entity. Decide how you return the updated row and how `updatedAt` gets refreshed.
+- Migrations live in `src/migrations`. Generate after finishing the entities, read the SQL, rename if you like, run, revert, run again.
+- Test database: already wired (`TEST_DB_*`, `docker compose up -d postgres-test`, reset + migrate in `test/global-setup.ts`). You only need your migration to be correct.
 
 ## Level 3 – Debugging
 
-**Optional fields**
-- `@IsOptional()` skips *all* validators when the value is `undefined` **or `null`**. Is that what the spec says about `null`? Look for a decorator that skips only on a condition you control.
-- A field that is optional in the update DTO must still be fully validated when it is present, including falsy values: `completed: false` is a value.
-- With class fields and `useDefineForClassFields`, a DTO instance can have *own properties set to `undefined`* for fields the client never sent. Think about what that does to "is this object empty?" checks (`Object.keys`, `Object.values`, `Object.entries`).
-
-**Unknown properties accepted**
-- `whitelist` only *strips*; `forbidNonWhitelisted` is what turns stripping into an error, and it needs `whitelist: true`.
-- A property is "known" only if it has **at least one class-validator decorator**. A declared property without decorators is still considered unknown.
-- The pipe only runs if it is registered where the application under test sees it. Tests use `configureApp(app)`: a pipe created anywhere else (or only in `main.ts`) is invisible to them.
-- A parameter typed as an interface, a `type` alias, or `any` has no runtime metadata, so the pipe has nothing to validate against.
-
-**Wrong status codes**
-- `ParseIntPipe` alone accepts `0` and `-1`. A `404` for `0` means nothing checked positivity.
-- A `404` for a malformed id usually means the pipe order is wrong, or the lookup happens before validation. Parameter and body pipes run before the handler body.
-- A `500` almost always means a plain `Error` (or a `TypeError` on `undefined`) escaped instead of a Nest exception.
-- A `200` on `DELETE` instead of `204` is a `@HttpCode` question; a `201` on `PATCH` is not possible unless something is badly wrong.
-- With global `transform: true`, the pipe also converts primitive route params to the declared TS type. Values like `"1e2"` or `"0x10"` can become valid numbers before your own pipe sees them, which is why the test-suite deliberately does not include them. Know why.
-
-**Error shape**
-- `ValidationPipe`'s default error is `message: string[]` with no field names. Check what options the pipe exposes for building the exception, and what the exception's constructor accepts as a body.
-- The default 404 body already has `statusCode`, `message` and `error`. Do not rewrite what already conforms.
-- If you write a filter with `@Catch()` (no argument), you also catch non-HTTP errors. What should happen to those?
-
-**Tests that pass alone but fail together**
-- Each test builds a new application and therefore a new in-memory store. If a test passes alone and fails in a group, your code probably keeps state at module level (a `let tasks = []` outside the class, a static counter), so state leaks between apps in the same process.
-- Hard-coded ids (`/tasks/1`) work only when ids are predictable. Generated ids must not be assumed; the tests ask the API for ids.
-- Random ids can collide in a long suite; if ids ever repeat, think about what generates them.
-- Run one file at a time (`pnpm vitest run --config ./vitest.config.e2e.ts test/task2/validation.e2e-spec.ts`) and a single test with `-t "<name>"` to isolate.
+| Symptom | Likely cause |
+|---|---|
+| `Nest can't resolve dependencies of the XService (?)` | missing `@InjectRepository(Entity)`, or the entity isn't in this module's `forFeature`, or the module doesn't import the other module / the other module doesn't `exports` the provider |
+| `No metadata for "Project" was found` / `Entity metadata for Task#project was not found` | class has no `@Entity()`, it's not registered (`forFeature`), or the related class isn't registered anywhere |
+| `ReferenceError: Cannot access 'Project' before initialization` | circular import between the two entity files under ESM + decorator metadata. Use TypeORM's `Relation<T>` wrapper for the property type and lazy arrow functions in the decorators (`() => Project`) |
+| `relation "task" does not exist` | migration didn't run / wasn't built: `pnpm build` then check `pnpm migration:show` |
+| `No changes in database schema were found` | entities are not decorated yet, or the migration was already applied |
+| Migration CLI can't connect | `.env` missing or `DB_*` wrong; the CLI uses the dev database |
+| `QueryFailedError … 23505` | unique violation – this is the *expected* failure for duplicate names; check `error.driverError.code` and `constraint`, don't match on message text |
+| `23503` on task insert vs. on project delete | same code, different meaning: parent missing (→ 404) vs. children exist (→ 409). Decide using which operation you were doing |
+| Everything returns 409 | your `catch` is too broad |
+| `projectId` always `undefined` | relation exists but no explicit `projectId` column is mapped |
+| Circular JSON / huge responses | you returned entities with loaded relations both ways; return plain fields or select explicitly |
+| Tests see data from other tests | they use `resetDatabase()`; if you add tests keep using it and never rely on fixed ids |
+| Project deletion sometimes 500 under load | the check-then-delete race: the FK error from `delete` isn't being translated |
+| Unit test: "Cannot read properties of undefined (reading 'x')" on the repo | you used a repository method the unit fake doesn't implement (see list in `test/helpers/fake-repository.ts`) |
+| `ECONNREFUSED` in tests | `pnpm db:test:up`; wait for the container to be healthy |

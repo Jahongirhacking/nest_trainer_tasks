@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
-import { TasksController } from './tasks.controller.js';
 import { TasksService } from './tasks.service.js';
 
-// TODO: Register TasksController and TasksService in this module.
+/**
+ * TODO: Register TasksController, import TypeOrmModule.forFeature([...]) with
+ *       the entities this module needs, and import whatever it needs from
+ *       ProjectsModule (avoid circular module dependencies).
+ */
 @Module({
   providers: [TasksService],
-  controllers: [TasksController],
 })
 export class TasksModule {}

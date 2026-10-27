@@ -1,157 +1,191 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import {
+  createFakeRepositories,
+  type FakeRepository,
+} from '../../test/helpers/fake-repository.js';
+import { Project } from '../projects/entities/project.entity.js';
+import { ProjectsService } from '../projects/projects.service.js';
+import { Task } from './entities/task.entity.js';
 import { TasksService } from './tasks.service.js';
 
-// Works whether the service method is sync or async, and whether it throws
-// or rejects.
+// Works whether the service method is sync or async.
 const settle = async <T>(fn: () => T | Promise<T>): Promise<T> =>
   await Promise.resolve().then(fn);
 
 describe('TasksService', () => {
   let service: TasksService;
+  let projects: FakeRepository;
+  let tasks: FakeRepository;
 
-  // A brand-new module (and therefore a brand-new service with empty storage)
-  // for every test keeps the tests isolated.
+  const seedProject = async (name: string) =>
+    (await projects.save({ name })) as { id: number };
+
   beforeEach(async () => {
+    const fakes = createFakeRepositories();
+    projects = fakes.projects;
+    tasks = fakes.tasks;
+    // ProjectsService is offered too, so you may verify the parent project
+    // either through it or through the Project repository directly.
     const moduleRef = await Test.createTestingModule({
-      providers: [TasksService],
+      providers: [
+        TasksService,
+        ProjectsService,
+        { provide: getRepositoryToken(Task), useValue: tasks },
+        { provide: getRepositoryToken(Project), useValue: projects },
+      ],
     }).compile();
     service = moduleRef.get(TasksService);
   });
 
+  it('is built by Nest with the Task repository injected', () => {
+    expect(Object.values(service)).toContain(tasks);
+  });
+
   describe('create', () => {
-    it('assigns a numeric ID', async () => {
-      const task = await settle(() => service.create({ title: 'Learn Nest' }));
-      expect(typeof task.id).toBe('number');
-      expect(Number.isInteger(task.id)).toBe(true);
-      expect(task.id).toBeGreaterThan(0);
-    });
-
-    it('sets completed to false by default', async () => {
-      const task = await settle(() => service.create({ title: 'Learn Nest' }));
-      expect(task.completed).toBe(false);
-    });
-
-    it('sets a creation timestamp', async () => {
-      const before = Date.now();
-      const task = await settle(() => service.create({ title: 'Learn Nest' }));
-      const after = Date.now();
-      expect(task.createdAt).toBeInstanceOf(Date);
-      expect(task.createdAt.getTime()).toBeGreaterThanOrEqual(before);
-      expect(task.createdAt.getTime()).toBeLessThanOrEqual(after);
-    });
-
-    it('stores the title and optional description', async () => {
+    it('persists a task for an existing project through the repository', async () => {
+      const project = await seedProject('P');
       const task = await settle(() =>
-        service.create({ title: 'Learn Nest', description: 'Modules and DI' }),
+        service.create(project.id, { title: 'Write tests', description: 'd' }),
       );
-      expect(task.title).toBe('Learn Nest');
-      expect(task.description).toBe('Modules and DI');
+      expect(task).toMatchObject({
+        title: 'Write tests',
+        description: 'd',
+        completed: false,
+        projectId: project.id,
+      });
+      expect(typeof task.id).toBe('number');
+      expect(task.createdAt).toBeInstanceOf(Date);
+      expect(task.updatedAt).toBeInstanceOf(Date);
+      expect(tasks.rows).toHaveLength(1);
     });
 
-    it('produces different IDs for multiple tasks', async () => {
-      const a = await settle(() => service.create({ title: 'Task A' }));
-      const b = await settle(() => service.create({ title: 'Task B' }));
-      const c = await settle(() => service.create({ title: 'Task C' }));
-      expect(new Set([a.id, b.id, c.id]).size).toBe(3);
+    it('throws NotFoundException when the project does not exist', async () => {
+      await expect(
+        settle(() => service.create(999, { title: 'Orphan' })),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tasks.rows).toHaveLength(0);
+    });
+
+    it('does not let the DTO smuggle in id / timestamps / projectId', async () => {
+      const a = await seedProject('A');
+      const b = await seedProject('B');
+      const evil = {
+        title: 'Sneaky',
+        id: 777,
+        projectId: b.id,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      } as any;
+      const task = await settle(() => service.create(a.id, evil));
+      expect(task.projectId).toBe(a.id);
+      expect(task.id).not.toBe(777);
+      expect(task.createdAt.getTime()).toBeGreaterThan(0);
     });
   });
 
-  describe('findAll', () => {
-    it('returns an empty array when no tasks exist', async () => {
+  describe('findAll / findAllByProject', () => {
+    it('returns an empty array when nothing is stored', async () => {
       expect(await settle(() => service.findAll())).toEqual([]);
     });
 
-    it('returns the stored tasks', async () => {
-      const a = await settle(() => service.create({ title: 'Task A' }));
-      const b = await settle(() => service.create({ title: 'Task B' }));
-      const all = await settle(() => service.findAll());
-      expect(all).toHaveLength(2);
-      expect(all).toEqual(expect.arrayContaining([a, b]));
+    it('lists every task', async () => {
+      const a = await seedProject('A');
+      const b = await seedProject('B');
+      await service.create(a.id, { title: 'one' });
+      await service.create(b.id, { title: 'two' });
+      expect(await settle(() => service.findAll())).toHaveLength(2);
+    });
+
+    it('lists only the tasks of the requested project', async () => {
+      const a = await seedProject('A');
+      const b = await seedProject('B');
+      await service.create(a.id, { title: 'in A' });
+      await service.create(b.id, { title: 'in B' });
+      const result = await settle(() => service.findAllByProject(a.id));
+      expect(result.map((t) => t.title)).toEqual(['in A']);
+    });
+
+    it('returns [] for an existing project without tasks', async () => {
+      const a = await seedProject('A');
+      expect(await settle(() => service.findAllByProject(a.id))).toEqual([]);
+    });
+
+    it('throws NotFoundException for a missing project', async () => {
+      await expect(
+        settle(() => service.findAllByProject(999)),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
   describe('findOne', () => {
-    it('returns the correct task', async () => {
-      await settle(() => service.create({ title: 'Task A' }));
-      const b = await settle(() => service.create({ title: 'Task B' }));
-      const found = await settle(() => service.findOne(b.id));
-      expect(found).toEqual(b);
-      expect(found.title).toBe('Task B');
+    it('returns an existing task', async () => {
+      const p = await seedProject('A');
+      const { id } = await service.create(p.id, { title: 'find me' });
+      expect(await settle(() => service.findOne(id))).toMatchObject({
+        id,
+        title: 'find me',
+      });
     });
 
-    it('throws NotFoundException for a nonexistent task', async () => {
-      await expect(settle(() => service.findOne(9999))).rejects.toBeInstanceOf(
+    it('throws NotFoundException for a missing task', async () => {
+      await expect(settle(() => service.findOne(999))).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
   });
 
   describe('update', () => {
-    it('changes only the specified properties', async () => {
-      const created = await settle(() =>
-        service.create({ title: 'Original', description: 'Keep me' }),
-      );
+    it('updates the allowed fields and keeps the project', async () => {
+      const p = await seedProject('A');
+      const { id } = await service.create(p.id, { title: 'old' });
       const updated = await settle(() =>
-        service.update(created.id, { completed: true }),
+        service.update(id, { title: 'new', completed: true }),
       );
-      expect(updated.completed).toBe(true);
-      expect(updated.title).toBe('Original');
-      expect(updated.description).toBe('Keep me');
-      expect(updated.id).toBe(created.id);
-      expect(updated.createdAt).toEqual(created.createdAt);
-
-      const renamed = await settle(() =>
-        service.update(created.id, { title: 'Renamed' }),
-      );
-      expect(renamed.title).toBe('Renamed');
-      expect(renamed.completed).toBe(true);
-      expect(renamed.description).toBe('Keep me');
+      expect(updated).toMatchObject({
+        id,
+        title: 'new',
+        completed: true,
+        projectId: p.id,
+      });
+      expect(tasks.rows[0]).toMatchObject({ title: 'new', completed: true });
     });
 
-    it('persists the change', async () => {
-      const created = await settle(() => service.create({ title: 'Original' }));
-      await settle(() => service.update(created.id, { title: 'Changed' }));
-      const found = await settle(() => service.findOne(created.id));
-      expect(found.title).toBe('Changed');
-    });
-
-    it('does not touch other tasks', async () => {
-      const a = await settle(() => service.create({ title: 'Task A' }));
-      const b = await settle(() => service.create({ title: 'Task B' }));
-      await settle(() => service.update(a.id, { title: 'Changed' }));
-      expect(await settle(() => service.findOne(b.id))).toEqual(b);
-    });
-
-    it('throws NotFoundException for a nonexistent task', async () => {
+    it('throws NotFoundException for a missing task', async () => {
       await expect(
-        settle(() => service.update(9999, { title: 'Nope' })),
+        settle(() => service.update(999, { title: 'x' })),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects an empty update', async () => {
+      const p = await seedProject('A');
+      const { id } = await service.create(p.id, { title: 'old' });
+      await expect(settle(() => service.update(id, {}))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('cannot move a task to another project', async () => {
+      const a = await seedProject('A');
+      const b = await seedProject('B');
+      const { id } = await service.create(a.id, { title: 'stay' });
+      await settle(() => service.update(id, { title: 'x', projectId: b.id } as any));
+      expect(tasks.rows[0].projectId).toBe(a.id);
     });
   });
 
   describe('remove', () => {
-    it('removes an existing task', async () => {
-      const a = await settle(() => service.create({ title: 'Task A' }));
-      const b = await settle(() => service.create({ title: 'Task B' }));
-      await settle(() => service.remove(a.id));
-
-      await expect(settle(() => service.findOne(a.id))).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-      expect(await settle(() => service.findAll())).toEqual([b]);
+    it('deletes the task but not its project', async () => {
+      const p = await seedProject('A');
+      const { id } = await service.create(p.id, { title: 'bye' });
+      await settle(() => service.remove(id));
+      expect(tasks.rows).toHaveLength(0);
+      expect(projects.rows).toHaveLength(1);
     });
 
-    it('throws NotFoundException for a nonexistent task', async () => {
-      await expect(settle(() => service.remove(9999))).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-    });
-
-    it('throws NotFoundException when deleting the same task twice', async () => {
-      const a = await settle(() => service.create({ title: 'Task A' }));
-      await settle(() => service.remove(a.id));
-      await expect(settle(() => service.remove(a.id))).rejects.toBeInstanceOf(
+    it('throws NotFoundException for a missing task', async () => {
+      await expect(settle(() => service.remove(999))).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });

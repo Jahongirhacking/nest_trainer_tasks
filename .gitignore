@@ -1,12 +1,10 @@
-cat >> .gitignore <<'EOF'
-
 # Build output
 dist/
 
 # Dependencies
 node_modules/
 
-# Environment variables
+# Environment variables (real credentials never get committed)
 .env
 .env.*
 !.env.example
@@ -23,4 +21,3 @@ coverage/
 .idea/
 .vscode/
 .DS_Store
-EOF

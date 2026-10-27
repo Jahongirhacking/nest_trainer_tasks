@@ -1,483 +1,265 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import request from 'supertest';
 import type { App } from 'supertest/types.js';
-import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/app.setup.js';
+import { errorFields, expectApiError } from './helpers/api-error.js';
+import {
+  createProject,
+  createTask,
+  createTestApp,
+  http,
+  missingProjectId,
+  missingTaskId,
+  resetDatabase,
+  type TaskBody,
+} from './helpers/app.js';
 
-describe('Tasks API (e2e)', () => {
+describe('Tasks API (e2e, PostgreSQL)', () => {
   let app: INestApplication<App>;
-  const http = () => request(app.getHttpServer());
 
-  // A brand-new application (and therefore empty in-memory storage) for
-  // every test keeps the tests isolated and order-independent.
-  beforeEach(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication();
-    configureApp(app);
-    await app.init();
+  beforeAll(async () => {
+    app = await createTestApp();
   });
-
-  afterEach(async () => {
+  afterAll(async () => {
     await app.close();
   });
+  beforeEach(async () => {
+    await resetDatabase(app);
+  });
 
-  const createTask = async (body: Record<string, unknown> = {}) => {
-    const res = await http()
-      .post('/tasks')
-      .send({ title: 'A valid title', ...body })
-      .expect(201);
-    return res.body as {
-      id: number;
-      title: string;
-      description?: string;
-      completed: boolean;
-      createdAt: string;
-    };
+  const expectTaskShape = (body: TaskBody) => {
+    expect(typeof body.id).toBe('number');
+    expect(typeof body.title).toBe('string');
+    expect(typeof body.completed).toBe('boolean');
+    expect(typeof body.projectId).toBe('number');
+    expect(Number.isNaN(Date.parse(body.createdAt))).toBe(false);
+    expect(Number.isNaN(Date.parse(body.updatedAt))).toBe(false);
+    // The project is identified by projectId only: no nested/circular data.
+    expect(body).not.toHaveProperty('project');
+    expect(() => JSON.stringify(body)).not.toThrow();
   };
 
-  const expectBadRequest = (res: request.Response) => {
-    expect(res.status).toBe(400);
-    expect(res.body.statusCode).toBe(400);
-    expect(res.body.message).toBeDefined();
-    const messages = [res.body.message].flat();
-    expect(messages.length).toBeGreaterThan(0);
-    messages.forEach((m) => expect(typeof m).toBe('string'));
-  };
-
-  // Only meaningful once GET /tasks really exists (a missing route is a 404,
-  // which fails the 200 check here instead of passing silently).
-  const expectNoTasksStored = async () => {
-    const res = await http().get('/tasks').expect(200);
-    expect(res.body).toEqual([]);
-  };
-
-  // ---------------------------------------------------------------- POST
-  describe('POST /tasks', () => {
-    it('creates a task and returns 201 with server-generated fields', async () => {
+  describe('POST /projects/:projectId/tasks', () => {
+    it('creates a task (201) with server-generated fields', async () => {
+      const project = await createProject(app);
       const before = Date.now();
-      const res = await http()
-        .post('/tasks')
-        .send({
-          title: 'Learn NestJS modules',
-          description: 'Understand module boundaries and dependency injection',
-        })
+      const res = await http(app)
+        .post(`/projects/${project.id}/tasks`)
+        .send({ title: 'Implement authentication', description: 'Learn Passport and JWT' })
         .expect(201);
-      const after = Date.now();
-
-      expect(typeof res.body.id).toBe('number');
-      expect(Number.isInteger(res.body.id)).toBe(true);
-      expect(res.body.id).toBeGreaterThan(0);
-      expect(res.body.title).toBe('Learn NestJS modules');
-      expect(res.body.description).toBe(
-        'Understand module boundaries and dependency injection',
-      );
-      expect(res.body.completed).toBe(false);
-
-      const createdAt = new Date(res.body.createdAt).getTime();
-      expect(Number.isNaN(createdAt)).toBe(false);
-      expect(createdAt).toBeGreaterThanOrEqual(before - 1000);
-      expect(createdAt).toBeLessThanOrEqual(after + 1000);
-    });
-
-    it('creates a task without a description', async () => {
-      const task = await createTask({ title: 'No description' });
-      expect(task.completed).toBe(false);
-    });
-
-    it('assigns different IDs to different tasks', async () => {
-      const a = await createTask({ title: 'Task A' });
-      const b = await createTask({ title: 'Task B' });
-      expect(a.id).not.toBe(b.id);
-    });
-
-    it('accepts boundary lengths (title 3 and 100, description 500)', async () => {
-      await http().post('/tasks').send({ title: 'abc' }).expect(201);
-      await http()
-        .post('/tasks')
-        .send({ title: 'a'.repeat(100), description: 'd'.repeat(500) })
-        .expect(201);
-    });
-
-    it('measures the title length after trimming (padded valid title is accepted)', async () => {
-      await http().post('/tasks').send({ title: '   abc   ' }).expect(201);
-    });
-
-    it('rejects a missing title', async () => {
-      expectBadRequest(await http().post('/tasks').send({}));
-      expectBadRequest(
-        await http().post('/tasks').send({ description: 'only description' }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it('rejects a missing request body', async () => {
-      expectBadRequest(await http().post('/tasks'));
-    });
-
-    it('rejects a whitespace-only title', async () => {
-      expectBadRequest(await http().post('/tasks').send({ title: '     ' }));
-      expectBadRequest(await http().post('/tasks').send({ title: '\t\n ' }));
-      await expectNoTasksStored();
-    });
-
-    it('rejects a title shorter than 3 characters', async () => {
-      expectBadRequest(await http().post('/tasks').send({ title: 'ab' }));
-      await expectNoTasksStored();
-    });
-
-    it('rejects a title that is too short after trimming', async () => {
-      expectBadRequest(await http().post('/tasks').send({ title: '  ab  ' }));
-    });
-
-    it('rejects a title longer than 100 characters', async () => {
-      expectBadRequest(
-        await http()
-          .post('/tasks')
-          .send({ title: 'a'.repeat(101) }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it.each([123, true, null, ['abc'], { a: 'b' }])(
-      'rejects a non-string title (%j)',
-      async (title) => {
-        expectBadRequest(await http().post('/tasks').send({ title }));
-        await expectNoTasksStored();
-      },
-    );
-
-    it('rejects a description longer than 500 characters', async () => {
-      expectBadRequest(
-        await http()
-          .post('/tasks')
-          .send({ title: 'Valid title', description: 'd'.repeat(501) }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it.each([123, true, ['x'], { a: 'b' }])(
-      'rejects a non-string description (%j)',
-      async (description) => {
-        expectBadRequest(
-          await http()
-            .post('/tasks')
-            .send({ title: 'Valid title', description }),
-        );
-        await expectNoTasksStored();
-      },
-    );
-
-    it('rejects a client-provided completed value', async () => {
-      expectBadRequest(
-        await http()
-          .post('/tasks')
-          .send({ title: 'Valid title', completed: true }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it('rejects a client-provided id', async () => {
-      expectBadRequest(
-        await http().post('/tasks').send({ title: 'Valid title', id: 42 }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it('rejects a client-provided createdAt', async () => {
-      expectBadRequest(
-        await http().post('/tasks').send({
-          title: 'Valid title',
-          createdAt: '2000-01-01T00:00:00.000Z',
-        }),
-      );
-      await expectNoTasksStored();
-    });
-
-    it('rejects unknown properties', async () => {
-      expectBadRequest(
-        await http()
-          .post('/tasks')
-          .send({ title: 'Valid title', priority: 'high' }),
-      );
-      await expectNoTasksStored();
-    });
-  });
-
-  // ----------------------------------------------------------- GET (all)
-  describe('GET /tasks', () => {
-    it('returns an empty array when no tasks exist', async () => {
-      const res = await http().get('/tasks').expect(200);
-      expect(res.body).toEqual([]);
-    });
-
-    it('returns all created tasks', async () => {
-      const a = await createTask({ title: 'Task A' });
-      const b = await createTask({ title: 'Task B' });
-
-      const res = await http().get('/tasks').expect(200);
-
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body).toHaveLength(2);
-      expect(res.body).toEqual(expect.arrayContaining([a, b]));
-    });
-  });
-
-  // ------------------------------------------------------------ GET (one)
-  describe('GET /tasks/:id', () => {
-    it('returns the requested task', async () => {
-      await createTask({ title: 'Task A' });
-      const b = await createTask({ title: 'Task B' });
-
-      const res = await http().get(`/tasks/${b.id}`).expect(200);
-
-      expect(res.body).toEqual(b);
-    });
-
-    it('returns 404 for a nonexistent task', async () => {
-      const existing = await createTask();
-      const res = await http()
-        .get(`/tasks/${existing.id + 1000}`)
-        .expect(404);
-      expect(res.body.statusCode).toBe(404);
-    });
-
-    it.each(['abc', '0', '-1', '1.5', '1abc', '%20'])(
-      'returns 400 for the malformed id "%s"',
-      async (id) => {
-        expectBadRequest(await http().get(`/tasks/${id}`));
-      },
-    );
-  });
-
-  // ---------------------------------------------------------------- PATCH
-  describe('PATCH /tasks/:id', () => {
-    it('updates a single property and leaves the others unchanged', async () => {
-      const task = await createTask({
-        title: 'Original',
-        description: 'Keep me',
+      expectTaskShape(res.body);
+      expect(res.body).toMatchObject({
+        title: 'Implement authentication',
+        description: 'Learn Passport and JWT',
+        completed: false,
+        projectId: project.id,
       });
-
-      const res = await http()
-        .patch(`/tasks/${task.id}`)
-        .send({ completed: true })
-        .expect(200);
-
-      expect(res.body).toEqual({ ...task, completed: true });
-      const fetched = await http().get(`/tasks/${task.id}`).expect(200);
-      expect(fetched.body).toEqual({ ...task, completed: true });
+      expect(Date.parse(res.body.createdAt)).toBeGreaterThan(before - 5000);
     });
 
-    it('updates several properties at once', async () => {
-      const task = await createTask({ title: 'Original' });
+    it('description is optional', async () => {
+      const project = await createProject(app);
+      const res = await http(app)
+        .post(`/projects/${project.id}/tasks`)
+        .send({ title: 'No description' })
+        .expect(201);
+      expect(res.body.description ?? null).toBeNull();
+    });
 
-      const res = await http()
+    it('returns 404 when the project does not exist and stores nothing', async () => {
+      const id = await missingProjectId(app);
+      expectApiError(await http(app).post(`/projects/${id}/tasks`).send({ title: 'Orphan' }), 404);
+      expect((await http(app).get('/tasks').expect(200)).body).toEqual([]);
+    });
+
+    it.each(['abc', '0', '-3', '2.5'])('returns 400 for projectId "%s"', async (id) => {
+      expectApiError(await http(app).post(`/projects/${id}/tasks`).send({ title: 'Valid title' }), 400);
+    });
+
+    it.each([
+      ['missing title', {}],
+      ['empty title', { title: '' }],
+      ['whitespace-only title', { title: '     ' }],
+      ['too-long title', { title: 'a'.repeat(101) }],
+      ['too-long description', { title: 'Valid', description: 'a'.repeat(501) }],
+      ['client-provided id', { title: 'Valid title', id: 5 }],
+      ['client-provided projectId', { title: 'Valid title', projectId: 1 }],
+      ['client-provided completed flag', { title: 'Valid title', completed: true }],
+      ['client-provided createdAt', { title: 'Valid title', createdAt: '2000-01-01' }],
+      ['unknown property', { title: 'Valid title', x: 1 }],
+    ])('returns 400 for %s', async (_label, body) => {
+      const project = await createProject(app);
+      const res = await http(app).post(`/projects/${project.id}/tasks`).send(body);
+      expectApiError(res, 400, { fields: true });
+      expect((await http(app).get('/tasks').expect(200)).body).toEqual([]);
+    });
+
+    it('rejects a body-supplied projectId even if the route project exists', async () => {
+      const a = await createProject(app);
+      const b = await createProject(app);
+      const res = await http(app)
+        .post(`/projects/${a.id}/tasks`)
+        .send({ title: 'Valid title', projectId: b.id });
+      expect(errorFields(expectApiError(res, 400, { fields: true }))).toContain('projectId');
+    });
+  });
+
+  describe('GET /projects/:projectId/tasks', () => {
+    it('returns only the tasks of that project', async () => {
+      const a = await createProject(app);
+      const b = await createProject(app);
+      const inA = await createTask(app, a.id);
+      await createTask(app, b.id);
+      const res = await http(app).get(`/projects/${a.id}/tasks`).expect(200);
+      expect((res.body as TaskBody[]).map((t) => t.id)).toEqual([inA.id]);
+      (res.body as TaskBody[]).forEach(expectTaskShape);
+    });
+
+    it('returns [] for an existing project with no tasks', async () => {
+      const project = await createProject(app);
+      expect((await http(app).get(`/projects/${project.id}/tasks`).expect(200)).body).toEqual([]);
+    });
+
+    it('returns 404 for a missing project', async () => {
+      const id = await missingProjectId(app);
+      expectApiError(await http(app).get(`/projects/${id}/tasks`), 404);
+    });
+
+    it('returns 400 for a malformed project id', async () => {
+      expectApiError(await http(app).get('/projects/abc/tasks'), 400);
+    });
+  });
+
+  describe('GET /tasks', () => {
+    it('returns an empty array when there are no tasks', async () => {
+      expect((await http(app).get('/tasks').expect(200)).body).toEqual([]);
+    });
+
+    it('returns tasks of every project', async () => {
+      const a = await createProject(app);
+      const b = await createProject(app);
+      const t1 = await createTask(app, a.id);
+      const t2 = await createTask(app, b.id);
+      const res = await http(app).get('/tasks').expect(200);
+      expect((res.body as TaskBody[]).map((t) => t.id).sort((x, y) => x - y)).toEqual([t1.id, t2.id].sort((x, y) => x - y));
+    });
+  });
+
+  describe('GET /tasks/:id', () => {
+    it('returns the task', async () => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id, { description: 'd' });
+      const res = await http(app).get(`/tasks/${task.id}`).expect(200);
+      expectTaskShape(res.body);
+      expect(res.body).toMatchObject({ id: task.id, projectId: project.id, description: 'd' });
+    });
+
+    it.each(['abc', '0', '-1', '1.5'])('returns 400 for id "%s"', async (id) => {
+      expectApiError(await http(app).get(`/tasks/${id}`), 400);
+    });
+
+    it('returns 404 for a missing task', async () => {
+      const id = await missingTaskId(app);
+      expectApiError(await http(app).get(`/tasks/${id}`), 404);
+    });
+  });
+
+  describe('PATCH /tasks/:id', () => {
+    it('updates title, description and completed', async () => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id);
+      const res = await http(app)
         .patch(`/tasks/${task.id}`)
-        .send({
-          title: 'Renamed',
-          description: 'Now described',
-          completed: true,
-        })
+        .send({ title: 'Renamed', description: 'Changed', completed: true })
         .expect(200);
+      expectTaskShape(res.body);
+      expect(res.body).toMatchObject({
+        id: task.id,
+        title: 'Renamed',
+        description: 'Changed',
+        completed: true,
+        projectId: project.id,
+      });
+      const reread = await http(app).get(`/tasks/${task.id}`).expect(200);
+      expect(reread.body.completed).toBe(true);
+    });
 
-      expect(res.body.title).toBe('Renamed');
-      expect(res.body.description).toBe('Now described');
-      expect(res.body.completed).toBe(true);
-      expect(res.body.id).toBe(task.id);
+    it('updates a single field only', async () => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id, { description: 'keep' });
+      const res = await http(app).patch(`/tasks/${task.id}`).send({ completed: true }).expect(200);
+      expect(res.body).toMatchObject({ title: task.title, description: 'keep', completed: true });
+    });
+
+    it('moves updatedAt forward and keeps createdAt', async () => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id);
+      await new Promise((r) => setTimeout(r, 20));
+      const res = await http(app).patch(`/tasks/${task.id}`).send({ completed: true }).expect(200);
       expect(res.body.createdAt).toBe(task.createdAt);
+      expect(Date.parse(res.body.updatedAt)).toBeGreaterThan(Date.parse(task.updatedAt));
     });
 
-    it('does not modify other tasks', async () => {
-      const a = await createTask({ title: 'Task A' });
-      const b = await createTask({ title: 'Task B' });
-      await http()
-        .patch(`/tasks/${a.id}`)
-        .send({ title: 'Changed' })
-        .expect(200);
-      const res = await http().get(`/tasks/${b.id}`).expect(200);
-      expect(res.body).toEqual(b);
+    it.each([
+      ['an empty body', {}],
+      ['an empty title', { title: '' }],
+      ['a too-long title', { title: 'a'.repeat(101) }],
+      ['a too-long description', { description: 'a'.repeat(501) }],
+      ['a non-boolean completed', { completed: 'yes' }],
+      ['an unknown property', { x: 1 }],
+      ['client-provided id', { id: 99 }],
+      ['client-provided projectId', { projectId: 99 }],
+      ['client-provided createdAt', { createdAt: '2000-01-01' }],
+      ['client-provided updatedAt', { updatedAt: '2000-01-01' }],
+    ])('rejects %s with 400', async (_label, body) => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id);
+      expectApiError(await http(app).patch(`/tasks/${task.id}`).send(body), 400);
+      const reread = await http(app).get(`/tasks/${task.id}`).expect(200);
+      expect(reread.body).toMatchObject({ title: task.title, projectId: project.id });
     });
 
-    it('returns 404 for a nonexistent task', async () => {
-      const existing = await createTask();
-      const res = await http()
-        .patch(`/tasks/${existing.id + 1000}`)
-        .send({ title: 'Valid title' })
-        .expect(404);
-      expect(res.body.statusCode).toBe(404);
+    it('does not allow moving a task to another project', async () => {
+      const a = await createProject(app);
+      const b = await createProject(app);
+      const task = await createTask(app, a.id);
+      await http(app).patch(`/tasks/${task.id}`).send({ projectId: b.id }).expect(400);
+      expect((await http(app).get(`/tasks/${task.id}`).expect(200)).body.projectId).toBe(a.id);
     });
 
-    it.each(['abc', '0', '-1', '1.5'])(
-      'returns 400 for the malformed id "%s"',
-      async (id) => {
-        expectBadRequest(
-          await http().patch(`/tasks/${id}`).send({ title: 'Valid title' }),
-        );
-      },
-    );
-
-    it('rejects an empty body', async () => {
-      const task = await createTask();
-      expectBadRequest(await http().patch(`/tasks/${task.id}`).send({}));
+    it('returns 400 for a malformed id', async () => {
+      expectApiError(await http(app).patch('/tasks/abc').send({ completed: true }), 400);
     });
 
-    it('rejects a missing body', async () => {
-      const task = await createTask();
-      expectBadRequest(await http().patch(`/tasks/${task.id}`));
+    it('returns 404 for a missing task', async () => {
+      const id = await missingTaskId(app);
+      expectApiError(await http(app).patch(`/tasks/${id}`).send({ completed: true }), 404);
     });
-
-    it('rejects unknown properties', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http()
-          .patch(`/tasks/${task.id}`)
-          .send({ title: 'Valid title', priority: 'high' }),
-      );
-      expectBadRequest(
-        await http().patch(`/tasks/${task.id}`).send({ priority: 'high' }),
-      );
-    });
-
-    it('rejects attempts to modify id', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http()
-          .patch(`/tasks/${task.id}`)
-          .send({ id: task.id + 100 }),
-      );
-      const res = await http().get(`/tasks/${task.id}`).expect(200);
-      expect(res.body).toEqual(task);
-    });
-
-    it('rejects attempts to modify createdAt', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http()
-          .patch(`/tasks/${task.id}`)
-          .send({ createdAt: '2000-01-01T00:00:00.000Z' }),
-      );
-      const res = await http().get(`/tasks/${task.id}`).expect(200);
-      expect(res.body).toEqual(task);
-    });
-
-    it.each([123, true, null, ['abc']])(
-      'rejects a non-string title (%j)',
-      async (title) => {
-        const task = await createTask();
-        expectBadRequest(
-          await http().patch(`/tasks/${task.id}`).send({ title }),
-        );
-      },
-    );
-
-    it('rejects a whitespace-only title', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http().patch(`/tasks/${task.id}`).send({ title: '    ' }),
-      );
-    });
-
-    it('rejects a title shorter than 3 or longer than 100 characters', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http().patch(`/tasks/${task.id}`).send({ title: 'ab' }),
-      );
-      expectBadRequest(
-        await http()
-          .patch(`/tasks/${task.id}`)
-          .send({ title: 'a'.repeat(101) }),
-      );
-      const res = await http().get(`/tasks/${task.id}`).expect(200);
-      expect(res.body).toEqual(task);
-    });
-
-    it('rejects a description longer than 500 characters', async () => {
-      const task = await createTask();
-      expectBadRequest(
-        await http()
-          .patch(`/tasks/${task.id}`)
-          .send({ description: 'd'.repeat(501) }),
-      );
-    });
-
-    it.each([123, true, ['x']])(
-      'rejects a non-string description (%j)',
-      async (description) => {
-        const task = await createTask();
-        expectBadRequest(
-          await http().patch(`/tasks/${task.id}`).send({ description }),
-        );
-      },
-    );
-
-    it.each(['true', 1, 0, null, 'yes'])(
-      'rejects a non-boolean completed (%j)',
-      async (completed) => {
-        const task = await createTask();
-        expectBadRequest(
-          await http().patch(`/tasks/${task.id}`).send({ completed }),
-        );
-        const res = await http().get(`/tasks/${task.id}`).expect(200);
-        expect(res.body.completed).toBe(false);
-      },
-    );
   });
 
-  // --------------------------------------------------------------- DELETE
   describe('DELETE /tasks/:id', () => {
-    it('deletes the task and returns 204 with no body', async () => {
-      const task = await createTask();
-
-      const res = await http().delete(`/tasks/${task.id}`).expect(204);
-      expect(res.text).toBeFalsy();
-
-      await http().get(`/tasks/${task.id}`).expect(404);
-      await expectNoTasksStored();
+    it('deletes the task (204) and keeps the project', async () => {
+      const project = await createProject(app);
+      const task = await createTask(app, project.id);
+      const res = await http(app).delete(`/tasks/${task.id}`).expect(204);
+      expect(res.text).toBe('');
+      expectApiError(await http(app).get(`/tasks/${task.id}`), 404);
+      await http(app).get(`/projects/${project.id}`).expect(200);
     });
 
-    it('only deletes the requested task', async () => {
-      const a = await createTask({ title: 'Task A' });
-      const b = await createTask({ title: 'Task B' });
-      await http().delete(`/tasks/${a.id}`).expect(204);
-      const res = await http().get('/tasks').expect(200);
-      expect(res.body).toEqual([b]);
+    it('does not delete sibling tasks', async () => {
+      const project = await createProject(app);
+      const keep = await createTask(app, project.id);
+      const drop = await createTask(app, project.id);
+      await http(app).delete(`/tasks/${drop.id}`).expect(204);
+      await http(app).get(`/tasks/${keep.id}`).expect(200);
     });
 
-    it('returns 404 for a nonexistent task', async () => {
-      const existing = await createTask();
-      const res = await http()
-        .delete(`/tasks/${existing.id + 1000}`)
-        .expect(404);
-      expect(res.body.statusCode).toBe(404);
+    it('returns 400 for a malformed id', async () => {
+      expectApiError(await http(app).delete('/tasks/abc'), 400);
     });
 
-    it('returns 404 when deleting the same task twice', async () => {
-      const task = await createTask();
-      await http().delete(`/tasks/${task.id}`).expect(204);
-      await http().delete(`/tasks/${task.id}`).expect(404);
-    });
-
-    it.each(['abc', '0', '-1', '1.5'])(
-      'returns 400 for the malformed id "%s"',
-      async (id) => {
-        expectBadRequest(await http().delete(`/tasks/${id}`));
-      },
-    );
-  });
-
-  // ---------------------------------------------------------- isolation
-  describe('isolation', () => {
-    it('starts every test with an empty store (part 1)', async () => {
-      await createTask();
-      const res = await http().get('/tasks').expect(200);
-      expect(res.body).toHaveLength(1);
-    });
-
-    it('starts every test with an empty store (part 2)', async () => {
-      const res = await http().get('/tasks').expect(200);
-      expect(res.body).toHaveLength(0);
+    it('returns 404 for a missing task', async () => {
+      const id = await missingTaskId(app);
+      expectApiError(await http(app).delete(`/tasks/${id}`), 404);
     });
   });
 });

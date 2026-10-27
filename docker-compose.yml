@@ -1,0 +1,48 @@
+# Local PostgreSQL for the training project. Credentials come from `.env`
+# (see `.env.example`); nothing is hard-coded here.
+#
+#   docker compose up -d postgres          # development database
+#   docker compose up -d postgres-test     # throw-away test database
+#   docker compose stop                    # stop (data is kept)
+#
+# Do NOT use `docker compose down -v` as routine cleanup: `-v` deletes the
+# development data volume.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:?set DB_USER in .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:?set DB_NAME in .env}
+    ports:
+      # Bound to loopback only: not reachable from other machines.
+      - '127.0.0.1:${DB_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-test:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${TEST_DB_USER:?set TEST_DB_USER in .env}
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:?set TEST_DB_PASSWORD in .env}
+      POSTGRES_DB: ${TEST_DB_NAME:?set TEST_DB_NAME in .env}
+    ports:
+      - '127.0.0.1:${TEST_DB_PORT:-5433}:5432'
+    # Data lives in memory: the test database is disposable by design and
+    # needs no volume.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:

@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import type { App } from 'supertest/types.js';
-import { createTask, createTestApp, http, missingId } from '../helpers/app.js';
+import { createTask, createTestApp, http, missingId } from '../app-helper.js';
 
 /**
  * [Task 1 prerequisite] gate.

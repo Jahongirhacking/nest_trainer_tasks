@@ -5,15 +5,15 @@ import {
   type INestApplication,
 } from '@nestjs/common';
 import type { App } from 'supertest/types.js';
-import { TasksService } from '../../src/tasks/tasks.service.js';
+import { TasksService } from '../../../src/tasks/tasks.service.js';
 import {
   createTask,
   createTestApp,
   http,
   missingId,
   type TaskBody,
-} from '../helpers/app.js';
-import { expectApiError, expectNoInternalDetails } from '../helpers/api-error.js';
+} from '../app-helper.js';
+import { expectApiError, expectNoInternalDetails } from '../../helpers/api-error.js';
 
 describe('[Task 2] consistent error responses', () => {
   let app: INestApplication<App>;
