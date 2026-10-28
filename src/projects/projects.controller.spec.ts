@@ -56,7 +56,9 @@ describe('ProjectsController', () => {
 
   it('findOne delegates with the numeric id', async () => {
     service.findOne.mockReturnValue(sample({ id: 5 }));
-    expect(await settle(() => controller.findOne(5))).toEqual(sample({ id: 5 }));
+    expect(await settle(() => controller.findOne(5))).toEqual(
+      sample({ id: 5 }),
+    );
     expect(service.findOne).toHaveBeenCalledWith(5);
   });
 

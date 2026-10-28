@@ -1,7 +1,4 @@
-import {
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import {
@@ -44,7 +41,10 @@ describe('ProjectsService', () => {
       const created = await settle(() =>
         service.create({ name: 'Backend', description: 'API work' }),
       );
-      expect(created).toMatchObject({ name: 'Backend', description: 'API work' });
+      expect(created).toMatchObject({
+        name: 'Backend',
+        description: 'API work',
+      });
       expect(typeof created.id).toBe('number');
       expect(created.createdAt).toBeInstanceOf(Date);
       expect(projects.rows).toHaveLength(1);
@@ -53,9 +53,9 @@ describe('ProjectsService', () => {
 
     it('rejects a duplicate name with ConflictException', async () => {
       await settle(() => service.create({ name: 'Backend' }));
-      await expect(settle(() => service.create({ name: 'Backend' }))).rejects.toBeInstanceOf(
-        ConflictException,
-      );
+      await expect(
+        settle(() => service.create({ name: 'Backend' })),
+      ).rejects.toBeInstanceOf(ConflictException);
       expect(projects.rows).toHaveLength(1);
     });
 
@@ -63,7 +63,9 @@ describe('ProjectsService', () => {
       const boom = new Error('connection terminated');
       projects.save.mockRejectedValueOnce(boom);
       projects.insert.mockRejectedValueOnce(boom);
-      await expect(settle(() => service.create({ name: 'X' }))).rejects.toBe(boom);
+      await expect(settle(() => service.create({ name: 'X' }))).rejects.toBe(
+        boom,
+      );
     });
   });
 
@@ -81,7 +83,10 @@ describe('ProjectsService', () => {
 
     it('returns an existing project', async () => {
       const { id } = await service.create({ name: 'A' });
-      expect(await settle(() => service.findOne(id))).toMatchObject({ id, name: 'A' });
+      expect(await settle(() => service.findOne(id))).toMatchObject({
+        id,
+        name: 'A',
+      });
     });
 
     it('throws NotFoundException for a missing project', async () => {
@@ -113,7 +118,7 @@ describe('ProjectsService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('allows keeping the project\'s own name', async () => {
+    it("allows keeping the project's own name", async () => {
       const a = await service.create({ name: 'A' });
       await expect(
         settle(() => service.update(a.id, { name: 'A', description: 'x' })),

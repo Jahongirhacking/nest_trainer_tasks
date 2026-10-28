@@ -1,3 +1,14 @@
+import type { Relation } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { Task } from '../../tasks/entities/task.entity.js';
+
 /**
  * TODO: Turn this class into a TypeORM entity (the starter is a plain class
  *       so the project compiles).
@@ -13,11 +24,19 @@
  * Careful with the circular import between Project and Task
  * (see HINTS.md, Level 3: "Entity metadata errors").
  */
+@Entity('projects')
 export class Project {
+  @PrimaryGeneratedColumn()
   id: number;
+  @Column({ unique: true, type: 'varchar', length: 100 })
   name: string;
+  @Column({ type: 'varchar', length: 500, nullable: true })
   description?: string | null;
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
   // TODO: tasks relationship
+  @OneToMany(() => Task, (task) => task.project)
+  tasks: Relation<Task[]>;
 }

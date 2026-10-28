@@ -1,4 +1,13 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { PositiveIntParam } from '../common/decorators/positive-int-param.decorator.js';
 import { CreateProjectDto } from './dto/create-project.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
 import type { Project } from './entities/project.entity.js';
@@ -13,33 +22,42 @@ import { ProjectsService } from './projects.service.js';
  *       ParsePositiveIntPipe), @Body and the status code decorators
  *       (POST 201, DELETE 204) for every endpoint in ASSIGNMENT.md.
  */
-@Injectable()
+@Controller('projects')
 export class ProjectsController {
   // TODO: inject ProjectsService through the constructor.
   constructor(private readonly projectsService: ProjectsService) {}
 
-  create(_dto: CreateProjectDto): Promise<Project> {
+  @Post()
+  create(@Body() _dto: CreateProjectDto): Promise<Project> {
     // TODO: POST /projects
-    throw new NotImplementedException('ProjectsController.create');
+    return this.projectsService.create(_dto);
   }
 
+  @Get()
   findAll(): Promise<Project[]> {
     // TODO: GET /projects
-    throw new NotImplementedException('ProjectsController.findAll');
+    return this.projectsService.findAll();
   }
 
-  findOne(_id: number): Promise<Project> {
+  @Get(':id')
+  findOne(@PositiveIntParam('id') _id: number): Promise<Project> {
     // TODO: GET /projects/:id
-    throw new NotImplementedException('ProjectsController.findOne');
+    return this.projectsService.findOne(_id);
   }
 
-  update(_id: number, _dto: UpdateProjectDto): Promise<Project> {
+  @Patch(':id')
+  update(
+    @PositiveIntParam('id') _id: number,
+    @Body() _dto: UpdateProjectDto,
+  ): Promise<Project> {
     // TODO: PATCH /projects/:id
-    throw new NotImplementedException('ProjectsController.update');
+    return this.projectsService.update(_id, _dto);
   }
 
-  remove(_id: number): Promise<void> {
+  @Delete(':id')
+  @HttpCode(204)
+  remove(@PositiveIntParam('id') _id: number): Promise<void> {
     // TODO: DELETE /projects/:id
-    throw new NotImplementedException('ProjectsController.remove');
+    return this.projectsService.remove(_id);
   }
 }

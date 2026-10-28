@@ -1,5 +1,5 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
+import { GlobalExceptionsFilter } from './common/filters/global-exception.filter.js';
 
 /**
  * Application-wide configuration shared by `main.ts` AND the E2E tests,
@@ -25,5 +25,5 @@ export function configureApp(app: INestApplication): void {
       transform: true,
     }),
   );
-  app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalFilters(new GlobalExceptionsFilter());
 }

@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsString,
@@ -18,6 +19,7 @@ import { Task } from '../entities/task.entity.js';
 export class UpdateTaskDto {
   @IsString()
   @ValidateIf((_, value) => value !== undefined)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @Length(3, 100)
   @Matches(/\S/, {
     message: 'title must not be whitespace-only',

@@ -170,7 +170,9 @@ describe('TasksService', () => {
       const a = await seedProject('A');
       const b = await seedProject('B');
       const { id } = await service.create(a.id, { title: 'stay' });
-      await settle(() => service.update(id, { title: 'x', projectId: b.id } as any));
+      await settle(() =>
+        service.update(id, { title: 'x', projectId: b.id } as any),
+      );
       expect(tasks.rows[0].projectId).toBe(a.id);
     });
   });

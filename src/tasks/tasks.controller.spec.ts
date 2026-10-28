@@ -50,7 +50,9 @@ describe('TasksController', () => {
 
   it('findAllByProject delegates with the project id', async () => {
     service.findAllByProject.mockReturnValue([sample()]);
-    expect(await settle(() => controller.findAllByProject(4))).toEqual([sample()]);
+    expect(await settle(() => controller.findAllByProject(4))).toEqual([
+      sample(),
+    ]);
     expect(service.findAllByProject).toHaveBeenCalledWith(4);
   });
 

@@ -47,7 +47,9 @@ describe('[Task 3] CreateProjectDto validation', () => {
       ['a number', 5],
       ['an array', ['x']],
     ])('rejects a description that is %s', async (_label, description) => {
-      expect(await validate({ name: 'P', description })).toContain('description');
+      expect(await validate({ name: 'P', description })).toContain(
+        'description',
+      );
     });
   });
 

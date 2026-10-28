@@ -18,12 +18,41 @@
 export const PG_UNIQUE_VIOLATION = '23505';
 export const PG_FOREIGN_KEY_VIOLATION = '23503';
 
+interface PostgreSqlDriverError {
+  code?: string;
+  constraint?: string;
+}
+
+export function getDriverError(
+  error: unknown,
+): PostgreSqlDriverError | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  if (!('driverError' in error)) {
+    return undefined;
+  }
+
+  const driverError = error.driverError;
+
+  if (typeof driverError !== 'object' || driverError === null) {
+    return undefined;
+  }
+
+  if (!('code' in driverError)) {
+    return undefined;
+  }
+
+  return driverError as PostgreSqlDriverError;
+}
+
 export function isUniqueViolation(_error: unknown): boolean {
   // TODO: implement.
-  return false;
+  return getDriverError(_error)?.code === PG_UNIQUE_VIOLATION;
 }
 
 export function isForeignKeyViolation(_error: unknown): boolean {
   // TODO: implement.
-  return false;
+  return getDriverError(_error)?.code === PG_FOREIGN_KEY_VIOLATION;
 }
