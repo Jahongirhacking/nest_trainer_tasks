@@ -1,4 +1,10 @@
 import { loadEnvFile } from '../../src/database/database.config.js';
+import {
+  TEST_JWT_AUDIENCE,
+  TEST_JWT_EXPIRES_IN,
+  TEST_JWT_ISSUER,
+  TEST_JWT_SECRET,
+} from './jwt.js';
 
 /**
  * Points the application's DB_* variables at the dedicated TEST database
@@ -30,4 +36,11 @@ export function applyTestEnv(): void {
   e.DB_USER = e.TEST_DB_USER;
   e.DB_PASSWORD = e.TEST_DB_PASSWORD;
   e.DB_NAME = e.TEST_DB_NAME;
+
+  // Authentication settings are explicit and isolated in tests: a throw-away
+  // secret that exists only here, never the one from `.env`.
+  e.JWT_SECRET = TEST_JWT_SECRET;
+  e.JWT_EXPIRES_IN = TEST_JWT_EXPIRES_IN;
+  e.JWT_ISSUER = TEST_JWT_ISSUER;
+  e.JWT_AUDIENCE = TEST_JWT_AUDIENCE;
 }

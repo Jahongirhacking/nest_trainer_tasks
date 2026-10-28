@@ -4,6 +4,7 @@ import {
   buildTypeOrmOptions,
   loadEnvFile,
 } from './database/database.config.js';
+import { AuthModule } from './auth/auth.module.js';
 import { ProjectsModule } from './projects/projects.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 
@@ -15,6 +16,7 @@ import { TasksModule } from './tasks/tasks.module.js';
         return buildTypeOrmOptions();
       },
     }),
+    AuthModule,
     ProjectsModule,
     TasksModule,
   ],

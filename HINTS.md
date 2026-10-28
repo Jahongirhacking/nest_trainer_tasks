@@ -1,45 +1,54 @@
-# Hints – Assignment 3 (read level by level)
+# Hints – Assignment 4 (read level by level)
+
+No level contains a finished method or a complete authentication flow.
 
 ## Level 1 – Concepts
 
-- **ORM**: maps rows to objects, so you work with classes instead of hand-written SQL strings. TypeORM does this with decorators.
-- **Entity**: a class that describes one table (columns, keys, relations). It is *not* a DTO: the entity describes storage, the DTO describes what a client may send.
-- **Repository**: an object bound to one entity that offers `find…`, `save`, `delete`, … It keeps data access out of your controllers and makes services testable (swap it for a fake).
-- **Injection**: `TypeOrmModule.forFeature([Entity])` registers a repository provider; `@InjectRepository(Entity)` asks Nest for it. The module that owns a service must import the `forFeature` of every entity that service injects.
-- **Many-to-One / One-to-Many**: many tasks point at one project. The *Many-to-One* side (task) owns the foreign key column; the *One-to-Many* side (project) is the inverse and has no column of its own.
-- **DTO validation vs. constraints**: a DTO protects the API; a constraint protects the data from *every* writer (bugs, scripts, concurrent requests). You need both. A pre-check query can be wrong a millisecond later; a unique index can't.
-- **Migrations**: versioned, reviewable, reversible schema changes. `synchronize` guesses and can destroy data.
-- **Persistence**: an array lives and dies with the process and is private to it; a database outlives restarts and is shared by many requests/instances, so concurrency becomes your problem.
+- **Authentication vs. authorization**: authentication answers "who are you?" (401 when it fails); authorization answers "what may you do?" (403). This assignment is only the first.
+- **Why hash passwords**: a database leak must not reveal passwords. A *password hash* is deliberately slow, salted and one-way. Fast hashes (SHA-256) are the wrong tool; encryption is reversible and also wrong. You never need the original password back, only to check a candidate against the hash.
+- **Signed is not encrypted**: a JWT is three base64url parts. Anyone can read the payload; the signature only proves that someone holding the secret produced it and that it was not altered. Never put secrets in it. Decode one by hand to see.
+- **Passport**: a small framework that standardises "run a strategy, and on success attach the result to `request.user`". Nest wraps it in `@nestjs/passport`.
+- **Local strategy**: turns `{ email, password }` into "a user or a failure".
+- **JWT strategy**: turns an `Authorization: Bearer …` header into "a user or a failure".
+- **Guards**: decide, before the handler runs, whether the request may continue. That is why the *guard* connects Passport to your routes.
+- **Custom decorator**: names an intent (`@CurrentUser()`) instead of repeating `req.user` plumbing.
+- **Minimal claims**: the token is copied everywhere (logs, proxies, browsers). Put in it only what you need to find the user again.
+- **Valid token ≠ existing user**: the signature can be perfect for an account deleted a minute ago. Decide what the server re-checks on every request, and what that costs.
 
 ## Level 2 – Structure
 
-- `ProjectsModule`: controller + service + `TypeOrmModule.forFeature([Project])`. `TasksModule`: controller + service + `forFeature([Task])`. Tasks must know whether a project exists: either export `ProjectsService` from `ProjectsModule` and import that module, or also register `Project` in `forFeature` of `TasksModule`. Pick one and be able to justify it. Don't make the two modules import each other.
-- `autoLoadEntities: true` is already on, so `forFeature` registration is what makes TypeORM aware of an entity.
-- Keep `entities/` (storage) and `dto/` (API) separate; DTOs may use `Entity['field']` types, entities never import DTOs.
-- Relation sketch (names only): on Task a `@ManyToOne` to Project together with an explicit `projectId` column bound via `@JoinColumn`; on Project a `@OneToMany` back. Decide the `onDelete` behaviour deliberately.
-- Column types: use explicit lengths (`varchar(100)`), nullable description, `@CreateDateColumn` / `@UpdateDateColumn`, a boolean with a default.
-- Service shape: each method = one clear repository call + translating "no row" to `NotFoundException`. `findOne` returns `null`, `findOneByOrFail` throws – choose consciously.
-- Deleting a project: three honest options – (a) count tasks first then delete, (b) just delete and translate the FK error, (c) both. Think about which stays correct under concurrency.
-- Update: `repository.update()` returns only an affected count; `save()`/`preload()` returns the entity. Decide how you return the updated row and how `updatedAt` gets refreshed.
-- Migrations live in `src/migrations`. Generate after finishing the entities, read the SQL, rename if you like, run, revert, run again.
-- Test database: already wired (`TEST_DB_*`, `docker compose up -d postgres-test`, reset + migrate in `test/global-setup.ts`). You only need your migration to be correct.
+- **Modules**: `UsersModule` owns the repository and exports `UsersService`. `AuthModule` imports `UsersModule`. `AuthModule` also needs `PassportModule` and `JwtModule`, plus providers for strategies, guards and the `JWT_CONFIG` token.
+- **Where hashing lives**: in the auth layer, as plain functions next to `AuthService`; `UsersService` only stores what it is given and never sees a plaintext password.
+- **Local flow**: guard → strategy `validate(email, password)` → `AuthService.validateUser()` → `UsersService.findByEmail()` + hash verification → safe user → `request.user` → controller → `AuthService.login()`.
+- **LocalAuthGuard**: a guard bound to the strategy *name* `'local'`. If the strategy is not registered under that name the guard has nothing to run.
+- **Token issuance**: only after authentication succeeded. The signing options (secret, lifetime, issuer, audience) must agree with the verifying options in the JWT strategy; both should read the same `JWT_CONFIG`.
+- **JwtAuthGuard**: same idea with the name `'jwt'`; put it where a route must be protected, not as a global default (Task 1–3 routes stay public).
+- **JwtStrategy**: Passport options handle extraction, signature, expiry; your `validate()` handles *meaning*: is `sub` something you issued, and does that user still exist?
+- **Returning from `validate()`**: whatever it returns becomes `request.user`. Build it from the database row, minus secrets.
+- **CurrentUser**: a decorator factory receives the optional argument you pass (`'email'`) and the execution context; from the context get the HTTP request.
+- **Config**: use the same `.env` loading approach `AppModule` uses for the database, and build `JWT_CONFIG` through a provider factory so a mistake aborts startup. Remember that `JwtModule` can be configured asynchronously from a provider.
+- **Normalizing email**: define it once and call it wherever an email enters (DTO, `register`, `validateUser`).
+- **Login 400 vs. 401**: guards run before pipes, so the local strategy sees the raw body. Decide where the body gets validated *before* credentials are checked. There is more than one place that works; pick one and be able to justify it.
+- **Migration**: finish and register the entity, then follow `src/migrations/README.md`, and read the SQL.
 
 ## Level 3 – Debugging
 
 | Symptom | Likely cause |
 |---|---|
-| `Nest can't resolve dependencies of the XService (?)` | missing `@InjectRepository(Entity)`, or the entity isn't in this module's `forFeature`, or the module doesn't import the other module / the other module doesn't `exports` the provider |
-| `No metadata for "Project" was found` / `Entity metadata for Task#project was not found` | class has no `@Entity()`, it's not registered (`forFeature`), or the related class isn't registered anywhere |
-| `ReferenceError: Cannot access 'Project' before initialization` | circular import between the two entity files under ESM + decorator metadata. Use TypeORM's `Relation<T>` wrapper for the property type and lazy arrow functions in the decorators (`() => Project`) |
-| `relation "task" does not exist` | migration didn't run / wasn't built: `pnpm build` then check `pnpm migration:show` |
-| `No changes in database schema were found` | entities are not decorated yet, or the migration was already applied |
-| Migration CLI can't connect | `.env` missing or `DB_*` wrong; the CLI uses the dev database |
-| `QueryFailedError … 23505` | unique violation – this is the *expected* failure for duplicate names; check `error.driverError.code` and `constraint`, don't match on message text |
-| `23503` on task insert vs. on project delete | same code, different meaning: parent missing (→ 404) vs. children exist (→ 409). Decide using which operation you were doing |
-| Everything returns 409 | your `catch` is too broad |
-| `projectId` always `undefined` | relation exists but no explicit `projectId` column is mapped |
-| Circular JSON / huge responses | you returned entities with loaded relations both ways; return plain fields or select explicitly |
-| Tests see data from other tests | they use `resetDatabase()`; if you add tests keep using it and never rely on fixed ids |
-| Project deletion sometimes 500 under load | the check-then-delete race: the FK error from `delete` isn't being translated |
-| Unit test: "Cannot read properties of undefined (reading 'x')" on the repo | you used a repository method the unit fake doesn't implement (see list in `test/helpers/fake-repository.ts`) |
-| `ECONNREFUSED` in tests | `pnpm db:test:up`; wait for the container to be healthy |
+| `Nest can't resolve dependencies of the LocalStrategy / JwtStrategy / AuthService` | provider missing in `AuthModule`; `UsersService` not exported/imported; `JWT_CONFIG` provider not registered; `JwtService` missing (is `JwtModule` imported?) |
+| `Unknown authentication strategy "local"` / `"jwt"` | strategy not a provider, not imported anywhere, or registered under a different name than the guard asks for |
+| `UnauthorizedException` on login with *correct* data and no strategy call | `usernameField` still `username` while the body sends `email` (Passport then sees "missing credentials") |
+| Guard works but `request.user` is `undefined` in the controller | `validate()` returned `null/undefined`, or the controller reads another property |
+| Every token is rejected, including fresh ones | signing secret ≠ verifying secret; one side reads `process.env` before `.env` is loaded; algorithm mismatch; issuer/audience set on one side only |
+| Tokens never expire / expire instantly | `expiresIn` given as a bare number (seconds) vs. a string (`"15m"`); lifetime set in only one place; clock units (`iat`/`exp` are *seconds*) |
+| Token works from a header but a test sending it another way fails | bearer extraction: only `Authorization: Bearer <token>` is allowed; the query string must not work |
+| `Cannot read properties of undefined (reading 'passwordHash')` | the lookup returned `null` (unknown email) and the code kept going; or `select: false` hid the hash from the lookup login needs |
+| Verification always false | hashing a trimmed password but verifying the original (or the reverse); verifying against the wrong column; comparing the plain strings |
+| `TypeORM: no metadata for "User"` / table missing | entity not decorated or not in `forFeature`; migration not generated or run; test DB rebuilt before `pnpm build` ran |
+| Circular dependency warnings | `UsersModule` importing `AuthModule`, or two services injecting each other; dependencies must point one way |
+| `QueryFailedError … duplicate key` reaches the client | the unique violation is not translated (see `postgres-errors.ts`), or the error is thrown outside the `try` (a missing `await` in a `try/catch` again) |
+| Two parallel registrations both succeed / one returns 500 | relying on "check then insert" instead of the unique constraint |
+| Auth tests pass alone but fail together | shared database state; tests run one file at a time against a truncated database, do not depend on ids or on leftover rows |
+| Startup does not fail without a secret | the config function is never called at startup, or an empty string is treated as "set"; remember `.env` only fills variables that are *missing* |
+| Login returns 401 instead of 400 for a body without `email` | the guard ran first: validate the body before the strategy authenticates |
+| Passwords or hashes appear in logs | an exception filter or a debug `console.log` prints the request body or the entity |

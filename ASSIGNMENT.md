@@ -1,204 +1,236 @@
-# Assignment 3 – Persistent Task Management API with TypeORM and PostgreSQL
+# Assignment 4 – Secure Authentication System with NestJS, Passport, JWT and PostgreSQL
 
 **Difficulty:** Medium+
-**Builds on:** Assignment 2 (validation and error handling, see [docs/task_2/](docs/task_2/ASSIGNMENT.md))
-**Stack:** NestJS 12, TypeScript, PostgreSQL 16, TypeORM 1.x + `@nestjs/typeorm`, class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
+**Builds on:** Assignment 3 (TypeORM + PostgreSQL, see [docs/task_3/](docs/task_3/ASSIGNMENT.md)) and Assignment 2 (validation and the error envelope, see [docs/task_2/](docs/task_2/ASSIGNMENT.md))
+**Stack:** NestJS 12, TypeScript, PostgreSQL 16, TypeORM 1.x, Passport (`@nestjs/passport`, `passport-local`, `passport-jwt`), `@nestjs/jwt`, Argon2 (`argon2`), class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
 
-> Rule of the game: the scaffolding, configuration, Docker setup and tests are given. **Entities, DTOs, services, controllers, module wiring and the schema migration are yours.** Nothing marked `TODO` is pre-filled.
+> Rule of the game: the scaffolding, configuration, helpers and tests are given. **Hashing, credential checks, strategies, guards, the decorator, token issuance, configuration validation, module wiring, the entity and the migration are yours.** Everything marked `TODO` is intentionally unfinished and fails closed (HTTP 501 or a guard that denies).
+>
+> This repository uses **Vitest**, not Jest (as in Tasks 1–3). Tests were written for it; do not switch runners.
 
 ## 1. Learning objectives
 
-- PostgreSQL as the system of record instead of an in-memory array
-- TypeORM entities, `TypeOrmModule.forRoot/forFeature`, `@InjectRepository()`
-- The repository pattern with real injected repositories
-- One-to-Many / Many-to-One relations and a **real foreign key**
-- Database constraints (unique, not null, length, FK) vs. DTO validation
-- Migrations instead of `synchronize`
-- Translating *known* database errors to HTTP errors without hiding unknown ones
-- Integration testing against a real database
+- Authentication vs. authorization
+- Password hashing (why, which algorithm, how to verify)
+- The Passport model: strategies, `validate()`, `request.user`
+- A Local strategy for credentials and a JWT strategy for bearer tokens
+- Authentication guards and why the guard, not the controller, is the gatekeeper
+- A custom parameter decorator
+- JWT claims, signing, expiration, issuer/audience, and what a signature does *not* prove
+- Secure configuration: no default secrets, fail at startup
+- Not leaking information through error messages
 
-## 2. Functional requirements
+## 2. Scope
 
-Turn the in-memory Task API into a persistent one with two resources, **Project** (1) and **Task** (N). Restarting the application must not lose data. A task always belongs to exactly one existing project.
+**In scope:** registration, email/password login, Argon2 hashing, Local strategy, JWT access tokens, JWT strategy, guards, `GET /auth/me`, `CurrentUser`, protected endpoints, auth error handling, security configuration.
 
-## 3. Data model
+**Out of scope (do not build them, do not fake them):** roles/permissions/RBAC (Assignment 5), refresh tokens, token revocation/blacklist, email verification, password reset, social login/OAuth, MFA, sessions, microservices. The Task 1–3 endpoints (`/projects`, `/tasks`) stay public; protecting them is not part of this task.
 
-### Project
+## 3. Architecture
+
+```text
+HTTP request
+   │
+   ▼
+AuthController ── POST /auth/login ──► LocalAuthGuard ──► LocalStrategy
+   │                                                          │
+   │                                                          ▼
+   │                                         AuthService.validateUser()
+   │                                                          │
+   │                                          UsersService.findByEmail()
+   │                                          + password hash verification
+   │                                                          │
+   │          request.user = safe user  ◄─────────────────────┘
+   ▼
+AuthController.login() ──► AuthService.login() ──► JWT access token
+
+Protected route ──► JwtAuthGuard ──► JwtStrategy.validate(payload)
+                                          │ verify signature/exp/iss/aud (Passport)
+                                          ▼
+                                   UsersService.findById(sub)  → request.user
+```
+
+```text
+src/
+  auth/
+    auth.module.ts  auth.controller.ts  auth.service.ts
+    auth.config.ts  auth.constants.ts
+    dto/            register.dto.ts  login.dto.ts
+    strategies/     local.strategy.ts  jwt.strategy.ts
+    guards/         local-auth.guard.ts  jwt-auth.guard.ts
+    decorators/     current-user.decorator.ts
+  users/
+    entities/user.entity.ts  users.service.ts  users.module.ts
+```
+
+- `UsersModule` owns user persistence (the only place that touches the `User` repository) and exports `UsersService`.
+- `AuthModule` imports `UsersModule`; it never creates a second copy of user persistence. Avoid circular imports.
+- Controllers never touch a repository. Use constructor injection; never instantiate guards or strategies yourself.
+- Provided helpers you can rely on: `JWT_CONFIG` token and `JwtConfig` / `SafeUser` types in `auth.constants.ts`, and strategy names `'local'` / `'jwt'`.
+
+## 4. User data model
+
+Table **`users`** (the tests query it by these exact names):
+
+| Column | Rules |
+|---|---|
+| `id` | numeric, generated by the database |
+| `email` | required, **unique (database constraint)**, stored normalized (trimmed, lower case) |
+| `passwordHash` | required (`NOT NULL`), the Argon2 hash, never the password |
+| `createdAt`, `updatedAt` | database generated, `timestamptz`, never from the client |
+
+- Never return `passwordHash`; never put it in a JWT; never log passwords or hashes.
+- Keep `SafeUser` (no `passwordHash`) as the only user shape that leaves the service layer.
+- Existing `projects` / `tasks` tables are not touched.
+
+## 5. Endpoints
+
+Error envelope for **every** error: `{ statusCode, error, message, errors? }` exactly as in Task 2/3.
+
+### `POST /auth/register`
+
+```json
+{ "email": "developer@example.com", "password": "a long passphrase here" }
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| created | **201** | safe user, e.g. `{ "id": 1, "email": "developer@example.com", "createdAt": "…", "updatedAt": "…" }` |
+| invalid body / unknown or client-controlled property | **400** | envelope with `errors[]` |
+| email already registered | **409** | envelope, no database details |
+
+### `POST /auth/login` (Local strategy)
+
+```json
+{ "email": "developer@example.com", "password": "a long passphrase here" }
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| authenticated | **200** | `{ "accessToken": "<jwt>" }` |
+| malformed body (missing/mistyped/invalid fields) | **400** | envelope with `errors[]` |
+| unknown email **or** wrong password | **401** | `{ "statusCode": 401, "error": "Unauthorized", "message": "Invalid email or password" }` – *identical* for both cases |
+
+Design challenge: Passport reads the raw body *before* pipes run. You must make a malformed body end in 400, not 401 and not 500.
+
+### `GET /auth/me` (JwtAuthGuard)
+
+`Authorization: Bearer <token>` → **200** safe user of the token's owner. Identity comes only from the validated authentication context: never from the body, query string or route. **401** when the token is missing/malformed/expired/badly signed/has wrong issuer or audience, or **its user no longer exists**.
+
+### `GET /auth/protected` (JwtAuthGuard)
+
+**200** with a minimal body (e.g. `{ "message": "…" }`, no sensitive data), **401** otherwise.
+
+### Logout
+
+There is **no** logout endpoint. Logging out is client-side: the client discards the token. A stateless JWT stays valid until it expires (or until a server-side check, like loading the user, rejects it); deleting a copy on the client does not invalidate copies elsewhere. Revocation and refresh tokens are a separate, later topic. Do not add a route that implies otherwise.
+
+## 6. DTO validation rules
 
 | Field | Rules |
 |---|---|
-| `id` | numeric, generated by the database |
-| `name` | required, max 100 chars, not blank, **unique (database constraint)** |
-| `description` | optional (nullable), max 500 chars |
-| `createdAt`, `updatedAt` | server/database generated, never from the client |
+| `email` | required string, valid email, not blank; trimmed + lower-cased consistently (also inside `AuthService`, which the local strategy reaches without the DTO) |
+| `password` (register) | required string, **12–128 characters**, not whitespace-only. **Never trimmed or modified.** No composition rules (uppercase/digit/symbol) |
+| `password` (login) | required string; do not enforce the registration length policy here |
 
-### Task
+Reject unknown properties; explicitly `id`, `passwordHash`, `createdAt`, `updatedAt`, `role(s)`, `permissions`, `isAdmin`. Reuse the global `ValidationPipe` from Task 2; do not duplicate rules in controllers.
 
-| Field | Rules |
+## 7. Password hashing
+
+- Use **Argon2id** (`argon2` is installed; its defaults are Argon2id). Document in a short comment why you chose it if you pick something else (bcrypt is acceptable if you can justify it).
+- Hash before persisting; verify with the library's verify function; never compare strings yourself.
+- No plain SHA-256/MD5, no reversible encryption.
+- Keep hashing in plain functions you call from `AuthService` (the unit test builds `AuthService` with only `UsersService`, `JwtService` and `JWT_CONFIG`).
+- Tests never compare to a fixed hash string.
+
+## 8. JWT
+
+- Signed with `JWT_SECRET` (HS256 is what the helpers assume). Pin the algorithm on verification.
+- Lifetime **15 minutes** (`JWT_EXPIRES_IN=15m`); the e2e test checks `exp - iat == 900`.
+- Claims: `sub` = the user id (number or numeric string; the strategy accepts positive integers only) plus the registered claims `iat`, `exp` and, when configured, `iss` and `aud`. Nothing else without a clear purpose: no email unless you can justify it, no password/hash, no client-supplied claims, no roles.
+- `JWT_ISSUER` / `JWT_AUDIENCE` are optional **in production** but set by the test environment: when set, issue them *and* require them when verifying.
+- Token only from `Authorization: Bearer …`. Never from the query string.
+
+### Configuration
+
+`buildJwtConfig()` in `auth.config.ts` (yours) reads and validates the settings and is called while the module graph is built, so a bad configuration stops the app at **startup**:
+
+- no fallback secret in any environment; missing / empty / whitespace-only → error
+- in `NODE_ENV=production` a secret shorter than 32 characters → error
+- error messages name the variable, never its value
+
+## 9. Passport roles
+
+**LocalStrategy** (`name: 'local'`, body field `email`): hand credentials to `AuthService.validateUser()`; failure → `UnauthorizedException("Invalid email or password")` for every cause; no hash verification in the strategy; returns the safe user.
+
+**JwtStrategy** (`name: 'jwt'`): bearer extraction, signature, expiry, issuer/audience (via Passport options and `JWT_CONFIG`); `validate(payload)` rejects a malformed `sub`, loads the **current** user from PostgreSQL (deleted user → 401), returns a safe principal built from the database row, not from the token.
+
+**Guards:** `LocalAuthGuard` (strategy `local`) and `JwtAuthGuard` (strategy `jwt`). The handler must never run when authentication fails. Guards contain no password or signature logic.
+
+**`CurrentUser` decorator:** `@CurrentUser()` returns `request.user`; `@CurrentUser('email')` returns that property; if nothing authenticated the request it returns `undefined`. You must use it in `me()`; controllers should not reach into raw requests for the user.
+
+## 10. Database and migration
+
+Follow `src/migrations/README.md`. Generate one migration for `users` **after** the entity is finished, review the SQL, run it, revert it, run it again. `synchronize` stays off. Never edit Task 3 migrations. Do not drop or alter existing tables.
+
+## 11. Environment variables
+
+See `.env.example`. New: `JWT_SECRET` (required, no default), `JWT_EXPIRES_IN` (`15m`), optional `JWT_ISSUER`, `JWT_AUDIENCE`. Generate a local secret without committing it:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+```
+
+Put it in `.env` (git-ignored). The test suites ignore `.env` auth values and use their own throw-away ones (`test/helpers/jwt.ts`).
+
+## 12. Error handling
+
+| Case | Status |
 |---|---|
-| `id` | numeric, generated by the database |
-| `title` | required, max 100 chars (the Task 2 DTO rules still apply) |
-| `description` | optional (nullable), max 500 chars |
-| `completed` | boolean, default `false` |
-| `projectId` | **foreign key → Project**, required, set from the route, never from the body |
-| `createdAt`, `updatedAt` | server/database generated |
+| invalid register / login body | 400 |
+| duplicate email | 409 |
+| wrong credentials, missing/malformed/expired/badly signed token, deleted user | 401 |
+| unknown route (including logout/refresh) | 404 |
 
-## 4. Relationship requirements
+401 means "not authenticated"; 403 (authenticated but forbidden) is for Assignment 5. Never expose SQL errors, hashes, secrets, stack traces or verification internals. Unexpected errors remain 500 and are logged without credentials.
 
-- `Project 1 ──── N Task`, mapped with TypeORM's One-to-Many (Project side) and Many-to-One (Task side).
-- A real PostgreSQL FK must exist: the database rejects a task whose project does not exist.
-- Deleting a project that still has tasks is rejected with **409**. **No cascade**: the FK must be `NO ACTION`/`RESTRICT` (the tests check it is not `CASCADE`).
-- Do not store project data inside the task table. No eager loading by default; load relations on purpose. Responses must not contain circular structures: tasks expose `projectId`, not a nested `project`.
+## 13. Security requirements (critical – see EVALUATION.md)
 
-## 5. API
+1. No plaintext passwords stored, returned or logged; maintained hashing algorithm.
+2. No hash in any response or JWT.
+3. JWT signature and expiry enforced; algorithm pinned; no `alg: none`.
+4. Identity derived only from the validated token; the user is re-loaded from the database.
+5. One public login error for unknown email and wrong password.
+6. Email uniqueness enforced by PostgreSQL; concurrent duplicate registrations create one account.
+7. No hard-coded or fallback secrets; startup fails on bad configuration.
+8. No `.env` with credentials committed.
+9. No roles, refresh tokens or revocation faked.
 
-Same error envelope as Task 2: `{ statusCode, error, message, errors? }` (see [docs/task_2/ASSIGNMENT.md](docs/task_2/ASSIGNMENT.md)). Invalid IDs (`abc`, `0`, `-1`, `1.5`) → 400.
+## 14. Tests and commands
 
-### Projects
+| Command | What it runs |
+|---|---|
+| `pnpm test` | all unit tests (Tasks 1–4; no database) |
+| `pnpm test:auth` | only the auth/users unit tests |
+| `pnpm test:integration` | database tests (`users` constraints included), needs `pnpm db:test:up` |
+| `pnpm test:e2e` | all e2e tests, real app + test database |
+| `pnpm test:auth:e2e` | only the auth e2e tests |
+| `pnpm lint`, `pnpm build` | lint and compile |
 
-| Method & path | Success | Errors |
-|---|---|---|
-| `POST /projects` | 201 + project | 400 invalid body / unknown property, **409 duplicate name** |
-| `GET /projects` | 200 + array (`[]` when empty) | |
-| `GET /projects/:id` | 200 + project | 400 bad id, 404 |
-| `PATCH /projects/:id` | 200 + project | 400 (empty body, invalid, unknown props), 404, **409 name used by another project** |
-| `DELETE /projects/:id` | 204, no body | 400, 404, **409 project still has tasks** |
+Do not edit the provided tests. They never mock the database, Passport or JWT in the e2e suites, and the destructive setup refuses to run unless the database name ends in `_test`.
 
-```jsonc
-// POST /projects
-{ "name": "FotSpot Backend", "description": "Backend development tasks" }
-// 201
-{ "id": 1, "name": "FotSpot Backend", "description": "Backend development tasks",
-  "createdAt": "2026-10-27T10:00:00.000Z", "updatedAt": "2026-10-27T10:00:00.000Z" }
-```
+### Expected state on the untouched scaffold
 
-### Tasks
+- `pnpm build` and `pnpm lint` pass; all Task 1–3 tests still pass.
+- Auth unit tests, `test/auth*.e2e-spec.ts` and `test/integration/users.int-spec.ts` **fail** (501 / missing `users` table). That is the assignment.
+- A few negative tests (no logout route, no refresh route, error bodies without internals, malformed login body → 400) already pass on the scaffold, because the scaffold fails closed or the undecorated DTO rejects every field. They guard against regressions; they do not prove your work.
 
-| Method & path | Success | Errors |
-|---|---|---|
-| `POST /projects/:projectId/tasks` | 201 + task | 400 (bad id / invalid body / `projectId` in body), **404 project missing** |
-| `GET /projects/:projectId/tasks` | 200 + that project's tasks (`[]` if none) | 400, 404 project missing |
-| `GET /tasks` | 200 + all tasks | |
-| `GET /tasks/:id` | 200 + task | 400, 404 |
-| `PATCH /tasks/:id` | 200 + task | 400 (empty body, `id`/`projectId`/`createdAt`/`updatedAt`/unknown), 404 |
-| `DELETE /tasks/:id` | 204, no body | 400, 404 |
+## 15. Acceptance criteria
 
-```jsonc
-// POST /projects/1/tasks
-{ "title": "Implement authentication", "description": "Learn Passport and JWT" }
-// 201
-{ "id": 1, "title": "Implement authentication", "description": "Learn Passport and JWT",
-  "completed": false, "projectId": 1,
-  "createdAt": "2026-10-27T10:05:00.000Z", "updatedAt": "2026-10-27T10:05:00.000Z" }
-// 409 (e.g. DELETE /projects/1 while it has tasks)
-{ "statusCode": 409, "error": "Conflict", "message": "…", "errors": [] }
-```
+- [ ] Registration, login, `/auth/me`, `/auth/protected` behave exactly as specified.
+- [ ] All provided tests pass unmodified, including the production-configuration tests.
+- [ ] `users` migration reviewed, reversible, without side effects on Task 3 tables.
+- [ ] No critical security failure from EVALUATION.md.
+- [ ] You can explain: why a valid signature is not enough, why guards run before pipes, why the login error is generic.
 
-`description` may be `null` or absent when not provided (either is accepted).
-
-**Route change vs. Task 1/2:** `POST /tasks` no longer exists – a task is created under its project. The other `/tasks` routes are unchanged. The Task 1/2 in-memory suites were moved to `test/legacy/` and are no longer executed (they target the removed array storage and `POST /tasks`).
-
-## 6. DTO validation
-
-- Project `name`: required, trimmed, not blank, ≤ 100. `description`: optional string ≤ 500.
-- `UpdateProjectDto`: both optional, same rules, **empty body rejected**.
-- Task DTOs keep the Task 2 rules. `projectId` is **not** accepted in any task body.
-- Global `ValidationPipe` (`whitelist` + `forbidNonWhitelisted`, already in `src/app.setup.ts`) rejects unknown properties.
-- DTO validation is the *first* line of defence; the database must enforce the invariants too (unique name, FK, not null, length).
-
-## 7. Database constraint requirements
-
-Enforced by the **database**, verified by `test/integration/database.int-spec.ts` by writing around the HTTP layer:
-
-- unique `project.name` → SQLSTATE `23505`
-- `NOT NULL` on required columns → `23502`
-- length limits (`varchar(100)` / `varchar(500)`) → `22001`
-- FK `task.projectId → project.id`, no cascade → `23503`
-- `completed` defaults to `false`
-
-## 8. Error handling requirements
-
-- Map **only known** violations: `23505` → 409 (duplicate name), `23503` → 409 (project has tasks) or 404 (parent project missing on task creation). Helpers go in `src/common/database/postgres-errors.ts`.
-- Any other database error must **not** become a 409. Let it surface as a 500 with a generic body and make sure it is logged for operators.
-- Responses never contain SQL, credentials or stack traces.
-
-## 9. Concurrency (read, then decide)
-
-"Check for tasks, then delete the project" is a classic race: another request can insert a task between the check and the delete. The FK stops the delete (no orphans), but your code must still answer with a clean 409 instead of a 500. Choose and document a strategy (rely on the FK error, a transaction, locking, …) and explain the trade-off in a short comment. The unit tests include a simulated race.
-
-## 10. Migrations
-
-`synchronize` is hard-wired to `false` in `src/database/database.config.ts` and migrations are never run on application start. **Why `synchronize: true` is unsafe in production:** on every boot it diffs entities against the live database and alters it – a renamed field becomes drop-column + add-column (data loss), there is no review, no history, no rollback, and two app instances can race on the same schema.
-
-The schema must come from a migration **you** produce. Workflow (all commands verified against the installed TypeORM 1.1.2; the CLI needs the *compiled* data source, so the scripts run `pnpm build` first):
-
-```bash
-# 1. After writing the entities: generate the SQL diff into src/migrations
-pnpm migration:generate src/migrations/CreateProjectsAndTasks
-#    (or create an empty file and write up()/down() by hand)
-pnpm migration:create src/migrations/CreateProjectsAndTasks
-
-# 2. REVIEW the generated file: FK, unique, defaults, lengths, down()
-
-# 3. Apply / inspect / undo (against the DEVELOPMENT database from .env)
-pnpm migration:run
-pnpm migration:show      # lists migrations; [X] = applied
-pnpm migration:revert    # undoes the latest migration only
-```
-
-Limitation: `migration:generate` only works once the entities are decorated; with the starter code it answers "No changes in database schema were found". Nothing here drops or recreates databases. The test setup resets **only** the `*_test` database and then applies your migrations from `dist/migrations`.
-
-## 11. Database setup
-
-```bash
-cp .env.example .env              # then replace every CHANGE_ME
-pnpm db:up                        # docker compose up -d postgres        (dev DB, persistent volume, 127.0.0.1:5432)
-pnpm db:test:up                   # docker compose up -d postgres-test   (test DB, in-memory, 127.0.0.1:5433)
-docker compose logs -f postgres   # logs
-docker compose exec postgres pg_isready          # connection check
-docker compose exec postgres psql -U "$DB_USER" -d "$DB_NAME"   # SQL shell
-pnpm db:stop                      # stop, data is kept
-```
-
-Never use `docker compose down -v` as routine cleanup (`-v` deletes the dev data volume).
-No Docker? Install PostgreSQL 16 locally, create two databases (`…` and `…_test`), and put their host/port/user/password into `.env`.
-
-Variables (placeholders in `.env.example`): `DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME` (app, CLI, compose), `TEST_DB_*` (test commands only; `TEST_DB_NAME` must end with `_test` and the host must be local, otherwise the tests refuse to run). Optional: `PORT`, `DB_RETRY_ATTEMPTS`, `DB_RETRY_DELAY_MS`, `DB_LOGGING`.
-
-## 12. Tests and commands
-
-| Command | What it runs | DB needed |
-|---|---|---|
-| `pnpm test` | unit tests (`src/**/*.spec.ts`), repositories faked in `test/helpers/fake-repository.ts` | no |
-| `pnpm test:dto` | DTO specs only | no |
-| `pnpm test:integration` | `test/integration/*.int-spec.ts`: constraints, persistence, timestamps, restart | test DB |
-| `pnpm test:e2e` | `test/*.e2e-spec.ts`: every endpoint | test DB |
-| `pnpm test:all` | all of the above | test DB |
-
-The two DB commands build first, reset and migrate the test database, and never touch the dev database. The unit-test fake supports the repository methods listed at the top of `test/helpers/fake-repository.ts`; QueryBuilder is fine in your code, but the unit fake does not emulate it (e2e/integration do the real verification).
-
-Do not edit the tests to make them pass.
-
-## 13. Acceptance criteria
-
-1. All unit, DTO, integration and e2e tests pass; `pnpm lint` and `pnpm build` are clean.
-2. Schema exists only because a migration of yours ran; `synchronize` is off.
-3. No array storage; services use injected `Repository` instances; controllers contain no queries.
-4. 409 only for the two known violations; unknown DB errors are logged and return a generic 500.
-5. `.env` is not committed; no secrets in the repo.
-
-## 14. Self-review checklist
-
-- [ ] Did I run `pnpm migration:revert` followed by `pnpm migration:run` successfully?
-- [ ] Does `down()` really undo `up()`?
-- [ ] Is the FK `NO ACTION`/`RESTRICT`, not `CASCADE`?
-- [ ] Is uniqueness enforced by the database, and not only by a pre-check query?
-- [ ] What happens if a task is created while its project is being deleted?
-- [ ] Can any response contain `project.tasks[…].project…` (circular) data?
-- [ ] Can a client set `id`, `projectId`, `createdAt` or `updatedAt` anywhere?
-- [ ] Is every `catch` narrow enough that a real outage is not reported as 409?
-- [ ] Does the start-up error for a wrong password/host avoid printing the password?
-
-## 15. Where to start
-
-`src/projects/entities/project.entity.ts`, then `src/tasks/entities/task.entity.ts`, then the migration, then DTOs → services → controllers → modules.
+Suggested order: entity + migration → `UsersService` → `auth.config.ts` → `AuthService` → DTOs → `LocalStrategy` + guard → login → `JwtStrategy` + guard → `CurrentUser` → `/auth/me`. The first file to open is `src/users/entities/user.entity.ts`.
