@@ -1,12 +1,12 @@
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import {
-  Body,
-  Controller,
-  Get,
-  NotImplementedException,
-  Post,
-} from '@nestjs/common';
+  JWT_STRATEGY,
+  LOCAL_STRATEGY,
+  type SafeUser,
+} from './auth.constants.js';
 import { AuthService } from './auth.service.js';
-import type { SafeUser } from './auth.constants.js';
+import { CurrentUser } from './decorators/current-user.decorator.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 
@@ -30,21 +30,27 @@ export class AuthController {
 
   @Post('register')
   register(@Body() _dto: RegisterDto): Promise<SafeUser> {
-    throw new NotImplementedException('TODO: POST /auth/register');
+    return this.authService.register(_dto);
   }
 
+  @UseGuards(AuthGuard(LOCAL_STRATEGY))
   @Post('login')
-  login(@Body() _dto: LoginDto): Promise<{ accessToken: string }> {
-    throw new NotImplementedException('TODO: POST /auth/login');
+  login(
+    @Body() _dto: LoginDto,
+    @CurrentUser() user: SafeUser,
+  ): Promise<{ accessToken: string }> {
+    return this.authService.login(user);
   }
 
+  @UseGuards(AuthGuard(JWT_STRATEGY))
   @Get('me')
-  me(): SafeUser {
-    throw new NotImplementedException('TODO: GET /auth/me');
+  me(@CurrentUser() user: SafeUser): SafeUser {
+    return user;
   }
 
+  @UseGuards(AuthGuard(JWT_STRATEGY))
   @Get('protected')
   protected(): { message: string } {
-    throw new NotImplementedException('TODO: GET /auth/protected');
+    return { message: 'This is a secret!!!' };
   }
 }

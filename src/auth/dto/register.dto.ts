@@ -1,3 +1,6 @@
+import { Transform } from 'class-transformer';
+import { IsEmail, IsString } from 'class-validator';
+
 /**
  * Payload for POST /auth/register.
  *
@@ -6,6 +9,11 @@
  *       may be trimmed and which must NEVER be modified.
  */
 export class RegisterDto {
+  @IsEmail()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   email: string;
+  @IsString()
   password: string;
 }

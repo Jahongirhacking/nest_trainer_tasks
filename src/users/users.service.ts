@@ -1,4 +1,6 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { User } from './entities/user.entity.js';
 
 /**
@@ -18,16 +20,28 @@ import { User } from './entities/user.entity.js';
  */
 @Injectable()
 export class UsersService {
-  create(_data: { email: string; passwordHash: string }): Promise<User> {
-    throw new NotImplementedException('TODO: UsersService.create');
+  constructor(
+    @InjectRepository(User) private readonly usersRepository: Repository<User>,
+  ) {}
+
+  async create(_data: { email: string; passwordHash: string }): Promise<User> {
+    const user = this.usersRepository.create({
+      email: _data.email,
+      passwordHash: _data.passwordHash,
+    });
+    return this.usersRepository.save(user);
   }
 
   /** Exact match on the stored (already normalized) email, or null. */
   findByEmail(_email: string): Promise<User | null> {
-    throw new NotImplementedException('TODO: UsersService.findByEmail');
+    const user = this.usersRepository.findOne({ where: { email: _email } });
+    if (!user) null;
+    return user;
   }
 
   findById(_id: number): Promise<User | null> {
-    throw new NotImplementedException('TODO: UsersService.findById');
+    const user = this.usersRepository.findOne({ where: { id: _id } });
+    if (!user) null;
+    return user;
   }
 }

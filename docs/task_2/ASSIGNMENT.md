@@ -1,4 +1,4 @@
-# Assignment 2 – Production-Quality Validation and Error Handling
+,k# Assignment 2 – Production-Quality Validation and Error Handling
 
 **Difficulty:** Medium+  
 **Builds on:** Assignment 1 (Task Management API, see [docs/task_1/](../task_1/ASSIGNMENT.md))  
@@ -26,11 +26,11 @@ pnpm test:e2e:task1-gate
 
 If it fails, finish Task 1 first (module wiring, controller routes and parameter decorators, DI). Failures in the `[Task 2]` suites are not meaningful until the gate is green. Test names tell you where a failure belongs:
 
-| Prefix in test name | Meaning |
-| ------------------- | ------- |
-| `[Task 1 prerequisite]` | the Task 1 foundation (app boots, five routes work on valid input) |
-| `[Task 2]` | the new validation / error-handling requirements |
-| *(no prefix)* | the original Task 1 suites (`test/tasks.e2e-spec.ts`, `src/tasks/tasks.*.spec.ts`), kept as regression tests |
+| Prefix in test name     | Meaning                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `[Task 1 prerequisite]` | the Task 1 foundation (app boots, five routes work on valid input)                                           |
+| `[Task 2]`              | the new validation / error-handling requirements                                                             |
+| _(no prefix)_           | the original Task 1 suites (`test/tasks.e2e-spec.ts`, `src/tasks/tasks.*.spec.ts`), kept as regression tests |
 
 ## 3. Functional requirements
 
@@ -38,12 +38,12 @@ Endpoints and domain model are unchanged from Task 1 (`id`, `title`, `descriptio
 
 ### A. `POST /tasks`
 
-| Property | Rule |
-| -------- | ---- |
-| `title` | required; string; **3–100 characters after trimming**; whitespace-only is invalid; `null`, missing or non-string is invalid |
-| `description` | optional; if supplied must be a string of at most 500 characters; an explicit `null` is **rejected** |
-| `completed`, `id`, `createdAt` | **must not be accepted** from the client. The server sets `completed = false` |
-| any other property | validation error; never silently accepted or stored |
+| Property                       | Rule                                                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `title`                        | required; string; **3–100 characters after trimming**; whitespace-only is invalid; `null`, missing or non-string is invalid |
+| `description`                  | optional; if supplied must be a string of at most 500 characters; an explicit `null` is **rejected**                        |
+| `completed`, `id`, `createdAt` | **must not be accepted** from the client. The server sets `completed = false`                                               |
+| any other property             | validation error; never silently accepted or stored                                                                         |
 
 `201 Created` on success, `400 Bad Request` on validation failure. A rejected request stores nothing.
 
@@ -79,18 +79,21 @@ Every expected client error (validation failures, malformed ids, missing tasks) 
   "error": "Bad Request",
   "message": "Validation failed",
   "errors": [
-    { "field": "title", "messages": ["title must be longer than or equal to 3 characters"] },
+    {
+      "field": "title",
+      "messages": ["title must be longer than or equal to 3 characters"]
+    },
     { "field": "priority", "messages": ["property priority should not exist"] }
   ]
 }
 ```
 
-| Field | Type | Rules |
-| ----- | ---- | ----- |
-| `statusCode` | number | equals the HTTP status of the response |
-| `error` | string | the standard HTTP reason phrase for that status (`"Bad Request"`, `"Not Found"`, `"Conflict"`, …): a stable category |
-| `message` | string | non-empty, human-readable summary. **A string, not an array.** Tests never compare its text |
-| `errors` | array, optional | present when the failure is attributable to specific request-body fields. Each entry is exactly `{ "field": string, "messages": string[] }` with at least one message. For an unknown property, `field` is that property's name. Omit it (or leave it out entirely) for errors that name no field: malformed ids, `404`, an empty PATCH body |
+| Field        | Type            | Rules                                                                                                                                                                                                                                                                                                                                        |
+| ------------ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `statusCode` | number          | equals the HTTP status of the response                                                                                                                                                                                                                                                                                                       |
+| `error`      | string          | the standard HTTP reason phrase for that status (`"Bad Request"`, `"Not Found"`, `"Conflict"`, …): a stable category                                                                                                                                                                                                                         |
+| `message`    | string          | non-empty, human-readable summary. **A string, not an array.** Tests never compare its text                                                                                                                                                                                                                                                  |
+| `errors`     | array, optional | present when the failure is attributable to specific request-body fields. Each entry is exactly `{ "field": string, "messages": string[] }` with at least one message. For an unknown property, `field` is that property's name. Omit it (or leave it out entirely) for errors that name no field: malformed ids, `404`, an empty PATCH body |
 
 Rules:
 
@@ -118,26 +121,26 @@ Rules:
 
 ## 5. Where to work
 
-| File | Task 2 work |
-| ---- | ----------- |
-| `src/tasks/dto/create-task.dto.ts` | complete the validation rules |
-| `src/tasks/dto/update-task.dto.ts` | complete the rules, reject `null` and `{}` |
-| `src/tasks/tasks.controller.ts` | route-param parsing/validation (and Task 1 leftovers) |
-| `src/app.setup.ts` | review pipe configuration, register the filter if you use one |
-| `src/common/filters/http-exception.filter.ts` | optional filter scaffold |
-| `src/tasks/tasks.service.ts` | exceptions for expected failures |
+| File                                          | Task 2 work                                                   |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| `src/tasks/dto/create-task.dto.ts`            | complete the validation rules                                 |
+| `src/tasks/dto/update-task.dto.ts`            | complete the rules, reject `null` and `{}`                    |
+| `src/tasks/tasks.controller.ts`               | route-param parsing/validation (and Task 1 leftovers)         |
+| `src/app.setup.ts`                            | review pipe configuration, register the filter if you use one |
+| `src/common/filters/http-exception.filter.ts` | optional filter scaffold                                      |
+| `src/tasks/tasks.service.ts`                  | exceptions for expected failures                              |
 
 ## 6. Tests
 
-| Command | What it runs |
-| ------- | ------------ |
-| `pnpm test:e2e:task1-gate` | `[Task 1 prerequisite]` smoke tests |
-| `pnpm test:task2` | DTO unit tests (`create-task.dto.spec.ts`, `update-task.dto.spec.ts`) |
-| `pnpm test:e2e:task2` | all `[Task 2]` + prerequisite E2E suites in `test/task2/` |
-| `pnpm test:e2e:task1` | the original Task 1 E2E suite (regression) |
-| `pnpm test` | all unit tests (Task 1 + Task 2) |
-| `pnpm test:e2e` | all E2E tests |
-| `pnpm lint` / `pnpm build` | static checks |
+| Command                    | What it runs                                                          |
+| -------------------------- | --------------------------------------------------------------------- |
+| `pnpm test:e2e:task1-gate` | `[Task 1 prerequisite]` smoke tests                                   |
+| `pnpm test:task2`          | DTO unit tests (`create-task.dto.spec.ts`, `update-task.dto.spec.ts`) |
+| `pnpm test:e2e:task2`      | all `[Task 2]` + prerequisite E2E suites in `test/task2/`             |
+| `pnpm test:e2e:task1`      | the original Task 1 E2E suite (regression)                            |
+| `pnpm test`                | all unit tests (Task 1 + Task 2)                                      |
+| `pnpm test:e2e`            | all E2E tests                                                         |
+| `pnpm lint` / `pnpm build` | static checks                                                         |
 
 Requires Node 22 (`nvm use`, see `.nvmrc`); the toolchain does not run on Node 18.
 

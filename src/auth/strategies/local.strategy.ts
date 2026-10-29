@@ -1,6 +1,8 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { Strategy } from 'passport-local';
+import { LOCAL_STRATEGY, type SafeUser } from '../auth.constants.js';
 import { AuthService } from '../auth.service.js';
-import type { SafeUser } from '../auth.constants.js';
 
 /**
  * Passport "local" strategy (strategy name: "local", body field: `email`).
@@ -16,10 +18,16 @@ import type { SafeUser } from '../auth.constants.js';
  * TODO: Password verification does NOT belong in this class.
  */
 @Injectable()
-export class LocalStrategy {
-  constructor(private readonly authService: AuthService) {}
+export class LocalStrategy extends PassportStrategy(Strategy, LOCAL_STRATEGY) {
+  constructor(private readonly authService: AuthService) {
+    super({
+      usernameField: 'email',
+    });
+  }
 
-  validate(_email: string, _password: string): Promise<SafeUser> {
-    throw new NotImplementedException('TODO: LocalStrategy.validate');
+  async validate(_email: string, _password: string): Promise<SafeUser> {
+    const user = await this.authService.validateUser(_email, _password);
+    if (!user) throw new UnauthorizedException('Validation failed');
+    return user;
   }
 }

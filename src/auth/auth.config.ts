@@ -1,4 +1,3 @@
-import { NotImplementedException } from '@nestjs/common';
 import type { JwtConfig } from './auth.constants.js';
 
 /**
@@ -21,5 +20,10 @@ import type { JwtConfig } from './auth.constants.js';
 export function buildJwtConfig(
   _env: NodeJS.ProcessEnv = process.env,
 ): JwtConfig {
-  throw new NotImplementedException('TODO: buildJwtConfig');
+  return {
+    secret: _env.JWT_SECRET as string,
+    expiresIn: _env.JWT_EXPIRES_IN as string,
+    issuer: _env.JWT_ISSUER as string,
+    audience: _env.JWT_AUDIENCE as string,
+  };
 }

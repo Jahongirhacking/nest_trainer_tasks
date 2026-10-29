@@ -1,8 +1,4 @@
-import {
-  createParamDecorator,
-  NotImplementedException,
-  type ExecutionContext,
-} from '@nestjs/common';
+import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { SafeUser } from '../auth.constants.js';
 
 /**
@@ -19,6 +15,7 @@ import type { SafeUser } from '../auth.constants.js';
  */
 export const CurrentUser = createParamDecorator(
   (_property: keyof SafeUser | undefined, _context: ExecutionContext) => {
-    throw new NotImplementedException('TODO: CurrentUser');
+    const req = _context.switchToHttp().getRequest();
+    return _property ? req.user?.[_property || ''] : req.user;
   },
 );

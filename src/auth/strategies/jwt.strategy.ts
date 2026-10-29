@@ -1,11 +1,14 @@
-import { Inject, Injectable, NotImplementedException } from '@nestjs/common';
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
 import { UsersService } from '../../users/users.service.js';
+import type { SafeUser } from '../auth.constants.js';
 import {
   JWT_CONFIG,
+  JWT_STRATEGY,
   type JwtConfig,
   type JwtPayload,
 } from '../auth.constants.js';
-import type { SafeUser } from '../auth.constants.js';
 
 /**
  * Passport "jwt" strategy (strategy name: "jwt").
@@ -24,13 +27,22 @@ import type { SafeUser } from '../auth.constants.js';
  *       the token that you did not decide to trust.
  */
 @Injectable()
-export class JwtStrategy {
+export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
   constructor(
     @Inject(JWT_CONFIG) private readonly jwtConfig: JwtConfig,
     private readonly usersService: UsersService,
-  ) {}
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: jwtConfig.secret,
+    });
+  }
 
-  validate(_payload: JwtPayload): Promise<SafeUser> {
-    throw new NotImplementedException('TODO: JwtStrategy.validate');
+  async validate(_payload: JwtPayload): Promise<SafeUser> {
+    const user = await this.usersService.findById(Number(_payload.sub));
+    if (!user) throw new UnauthorizedException('Validation failed');
+    return Object.fromEntries(
+      Object.entries(user).filter((i) => i[0] !== 'passwordHash'),
+    ) as SafeUser;
   }
 }
