@@ -1,53 +1,54 @@
-# Hints – Assignment 5 (read level by level)
+# Hints – Assignment 4 (read level by level)
 
-No level contains a finished decorator, guard or permission check.
+No level contains a finished method or a complete authentication flow.
 
 ## Level 1 – Concepts
 
-- **Authentication vs. authorization**: 401 = "I do not know who you are"; 403 = "I know who you are, and the answer is no". Task 4 produced the first; this task produces the second. Both are *guards*, but they are different guards with different answers.
-- **A decorator that "does something" often does nothing**: `@Roles()` does not check anything. It only attaches a note (metadata) to a class or a method. Another piece (the guard) reads the note later. Separating *declaring* from *enforcing* is the whole design.
-- **Reflector**: Nest's tool for reading that metadata back. It can look at one place, at several places, and it has helpers for the two questions "which place wins?" and "should the places be combined?". Read its documentation: the difference between the helpers is exactly this task's *route vs controller* question.
-- **ExecutionContext**: gives the guard the *handler* (the method) and the *class* (the controller) that are about to run, and the request. That is how a guard knows what metadata to read.
-- **Roles vs. permissions**: a role is a label for a kind of person; a permission is one thing that may be done. Routes that list permissions survive new roles; routes that list roles are shorter to read. The matrix connects them.
-- **Role-level vs. resource-level**: "managers may update tasks" is about the role. "you may change *this* task's status because it is yours" depends on the specific row, so a role alone cannot answer it.
-- **Never trust the client for identity**: a token is only proof of *who*, signed long ago. What that user may do **now** is in the database.
-- **Fail closed**: when in doubt (no user, unknown role, unexpected error) the answer is *no*.
+- **Authentication vs. authorization**: authentication answers "who are you?" (401 when it fails); authorization answers "what may you do?" (403). This assignment is only the first.
+- **Why hash passwords**: a database leak must not reveal passwords. A *password hash* is deliberately slow, salted and one-way. Fast hashes (SHA-256) are the wrong tool; encryption is reversible and also wrong. You never need the original password back, only to check a candidate against the hash.
+- **Signed is not encrypted**: a JWT is three base64url parts. Anyone can read the payload; the signature only proves that someone holding the secret produced it and that it was not altered. Never put secrets in it. Decode one by hand to see.
+- **Passport**: a small framework that standardises "run a strategy, and on success attach the result to `request.user`". Nest wraps it in `@nestjs/passport`.
+- **Local strategy**: turns `{ email, password }` into "a user or a failure".
+- **JWT strategy**: turns an `Authorization: Bearer …` header into "a user or a failure".
+- **Guards**: decide, before the handler runs, whether the request may continue. That is why the *guard* connects Passport to your routes.
+- **Custom decorator**: names an intent (`@CurrentUser()`) instead of repeating `req.user` plumbing.
+- **Minimal claims**: the token is copied everywhere (logs, proxies, browsers). Put in it only what you need to find the user again.
+- **Valid token ≠ existing user**: the signature can be perfect for an account deleted a minute ago. Decide what the server re-checks on every request, and what that costs.
 
 ## Level 2 – Structure
 
-- **Metadata keys** are in `rbac.constants.ts` so the decorator and the guard cannot disagree on the name.
-- **Decorators**: look at what Nest ships for attaching metadata, and at how a parameter decorator receives `(data, context)`. The existing Task 4 `CurrentUser` is the model for the param decorator, but this one is typed with `role`.
-- **Guard order**: guards listed in `@UseGuards(A, B)` run left to right; if `A` throws or says no, `B` never runs. Put authentication first. Guards run **before** pipes, which is why a forbidden caller never reaches body validation.
-- **Where to read the principal**: `request.user`, set by the Task 4 `JwtStrategy`. Check it for existence and for a *real* `Role` before using it.
-- **Returning `false`** from a guard makes Nest raise 403 for you. Throwing your own exception is also possible, but then the tests that expect `false` will tell you which contract the guard has here.
-- **Matrix → permissions**: the guard maps the caller's role to a list of permissions, then asks whether the required ones are all inside. Look at the array methods that answer "does every / does some".
-- **Ownership**: the id of the task is in the route parameters. The guard runs before the `PositiveIntParam` pipe, so validating the raw string is *your* job. Decide how a bad id is answered.
-- **Assignment rule**: it needs two roles (the caller's and the assignee's). The service already loads the assignee; the caller is passed in. Decide the status code for a violation and be able to defend it.
-- **Module wiring**: guards used with `@UseGuards(SomeGuard)` are instantiated by Nest in the context of the module that owns the controller, so their dependencies (`Reflector`, `RbacTasksService`) must be resolvable there.
-- **The `role` column**: add it to the `User` entity, then follow `src/migrations/README.md`. Existing rows need a default; ask yourself what role Task 4's registration should give new accounts.
+- **Modules**: `UsersModule` owns the repository and exports `UsersService`. `AuthModule` imports `UsersModule`. `AuthModule` also needs `PassportModule` and `JwtModule`, plus providers for strategies, guards and the `JWT_CONFIG` token.
+- **Where hashing lives**: in the auth layer, as plain functions next to `AuthService`; `UsersService` only stores what it is given and never sees a plaintext password.
+- **Local flow**: guard → strategy `validate(email, password)` → `AuthService.validateUser()` → `UsersService.findByEmail()` + hash verification → safe user → `request.user` → controller → `AuthService.login()`.
+- **LocalAuthGuard**: a guard bound to the strategy *name* `'local'`. If the strategy is not registered under that name the guard has nothing to run.
+- **Token issuance**: only after authentication succeeded. The signing options (secret, lifetime, issuer, audience) must agree with the verifying options in the JWT strategy; both should read the same `JWT_CONFIG`.
+- **JwtAuthGuard**: same idea with the name `'jwt'`; put it where a route must be protected, not as a global default (Task 1–3 routes stay public).
+- **JwtStrategy**: Passport options handle extraction, signature, expiry; your `validate()` handles *meaning*: is `sub` something you issued, and does that user still exist?
+- **Returning from `validate()`**: whatever it returns becomes `request.user`. Build it from the database row, minus secrets.
+- **CurrentUser**: a decorator factory receives the optional argument you pass (`'email'`) and the execution context; from the context get the HTTP request.
+- **Config**: use the same `.env` loading approach `AppModule` uses for the database, and build `JWT_CONFIG` through a provider factory so a mistake aborts startup. Remember that `JwtModule` can be configured asynchronously from a provider.
+- **Normalizing email**: define it once and call it wherever an email enters (DTO, `register`, `validateUser`).
+- **Login 400 vs. 401**: guards run before pipes, so the local strategy sees the raw body. Decide where the body gets validated *before* credentials are checked. There is more than one place that works; pick one and be able to justify it.
+- **Migration**: finish and register the entity, then follow `src/migrations/README.md`, and read the SQL.
 
 ## Level 3 – Debugging
 
 | Symptom | Likely cause |
 |---|---|
-| Every protected test returns 403, even for ADMIN | the guard still returns `false` (starter), or the matrix is empty |
-| The guard "ignores" `@Roles` | the decorator writes under a different key than the guard reads, or the decorator is still the no-op starter |
-| Controller-level `@Roles` is ignored when a route also has one | you read only the handler, or you combine instead of replace |
-| Controller-level `@Permissions` seems ignored | you read only the handler |
-| `undefined` in `@CurrentUser()` | the authentication guard did not run first, or the factory reads the wrong request field |
-| ADMIN is denied by `RolesGuard` on `/users/:id` | the route's `@Roles` does not list ADMIN; there is no automatic bypass |
-| 500 on `PATCH /tasks/abc/status` | the ownership guard converts the id without validating it |
-| Manager can assign a task to an admin | the assignment rule was not implemented, or it looks at an old role |
-| 404 instead of 403 for a forbidden caller on a missing id | the lookup happens before the role check (guards must run first) |
-| `Nest can't resolve dependencies of the TaskOwnerGuard` | `RbacTasksService` is not provided/exported where the controller lives |
-| After adding the `role` column Task 4 e2e tests fail | no default for existing rows, or registration does not set a role |
-
-Debugging tools: `pnpm test:rbac -t "roles.guard"` runs one file's tests; `console.log(Reflect.getMetadataKeys(Controller.prototype.method))` shows what a decorator wrote.
-
-## Level 4 – Design questions to answer in your own words
-
-1. Why do roles *replace* but permissions *merge* between handler and controller in this assignment? What bug does each choice prevent or create?
-2. What is the risk of "no metadata → allowed"? When would you flip the default, and what would break?
-3. Why is the role loaded from the database on every request instead of stored in the token? What does it cost?
-4. Why is a missing task 404 for everyone, and would you ever answer 403 instead?
-5. Guard or service policy for ownership: which did you choose, and what test would convince a reviewer?
+| `Nest can't resolve dependencies of the LocalStrategy / JwtStrategy / AuthService` | provider missing in `AuthModule`; `UsersService` not exported/imported; `JWT_CONFIG` provider not registered; `JwtService` missing (is `JwtModule` imported?) |
+| `Unknown authentication strategy "local"` / `"jwt"` | strategy not a provider, not imported anywhere, or registered under a different name than the guard asks for |
+| `UnauthorizedException` on login with *correct* data and no strategy call | `usernameField` still `username` while the body sends `email` (Passport then sees "missing credentials") |
+| Guard works but `request.user` is `undefined` in the controller | `validate()` returned `null/undefined`, or the controller reads another property |
+| Every token is rejected, including fresh ones | signing secret ≠ verifying secret; one side reads `process.env` before `.env` is loaded; algorithm mismatch; issuer/audience set on one side only |
+| Tokens never expire / expire instantly | `expiresIn` given as a bare number (seconds) vs. a string (`"15m"`); lifetime set in only one place; clock units (`iat`/`exp` are *seconds*) |
+| Token works from a header but a test sending it another way fails | bearer extraction: only `Authorization: Bearer <token>` is allowed; the query string must not work |
+| `Cannot read properties of undefined (reading 'passwordHash')` | the lookup returned `null` (unknown email) and the code kept going; or `select: false` hid the hash from the lookup login needs |
+| Verification always false | hashing a trimmed password but verifying the original (or the reverse); verifying against the wrong column; comparing the plain strings |
+| `TypeORM: no metadata for "User"` / table missing | entity not decorated or not in `forFeature`; migration not generated or run; test DB rebuilt before `pnpm build` ran |
+| Circular dependency warnings | `UsersModule` importing `AuthModule`, or two services injecting each other; dependencies must point one way |
+| `QueryFailedError … duplicate key` reaches the client | the unique violation is not translated (see `postgres-errors.ts`), or the error is thrown outside the `try` (a missing `await` in a `try/catch` again) |
+| Two parallel registrations both succeed / one returns 500 | relying on "check then insert" instead of the unique constraint |
+| Auth tests pass alone but fail together | shared database state; tests run one file at a time against a truncated database, do not depend on ids or on leftover rows |
+| Startup does not fail without a secret | the config function is never called at startup, or an empty string is treated as "set"; remember `.env` only fills variables that are *missing* |
+| Login returns 401 instead of 400 for a body without `email` | the guard ran first: validate the body before the strategy authenticates |
+| Passwords or hashes appear in logs | an exception filter or a debug `console.log` prints the request body or the entity |

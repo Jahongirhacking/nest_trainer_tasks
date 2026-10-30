@@ -1,30 +1,32 @@
-# Evaluation – Assignment 5 (100 points)
+# Evaluation – Assignment 4 (100 points)
 
 | Area | Points | What is judged |
 |---|---|---|
-| Role and permission model | 10 | enums used consistently, matrix correct and the single source of truth, `role` column + reviewed migration, Task 4 registration/login still work |
-| Custom decorators | 10 | `@Roles()` / `@Permissions()` record metadata only (class and method, right keys, empty-list behaviour); `@CurrentUser()` reads only the authenticated principal and is typed |
-| RolesGuard and Reflector | 15 | correct Reflector helper for "handler replaces controller", any-of semantics, missing metadata, bad/forged principals denied, returns `false` (403), no authentication inside |
-| PermissionsGuard | 15 | role → permissions mapping, all-of semantics, handler + controller combined, missing metadata, bad principals denied |
-| Resource-level authorization | 15 | `TaskOwnerGuard` (owner or ADMIN, unassigned = nobody), 404 for every caller on a missing task, malformed ids never 5xx, authorization before validation, assignment rule with the *current* assignee role |
-| 401 vs 403 and endpoint protection | 10 | every row of the endpoint table holds, anonymous = 401, forbidden = 403, no handler runs on denial, error envelope consistent, no credential fields in responses |
-| Architecture and wiring | 10 | no role checks in controllers, guard order (authentication first), DI/module boundaries, no circular imports, `RbacModule` integrated in `AppModule`, no route clash with Task 3 |
-| Tests | 10 | `pnpm test` and `pnpm test:e2e` green, provided tests untouched, any extra tests meaningful |
-| Code quality and maintainability | 5 | naming, small focused guards, consistency with the codebase, comments only where they add value |
+| Registration and input validation | 10 | DTO rules (email, 12–128 password, never trimmed), unknown/client-controlled properties rejected, normalization in the right places, 400/409 behaviour |
+| Password hashing and secure verification | 15 | maintained algorithm (Argon2id preferred), hash-before-persist, library verification, no plaintext anywhere, no hash in output, no logging, hashing responsibility clearly placed |
+| Passport Local Strategy | 10 | correct strategy name and `email` field, delegation to `AuthService`, one generic failure message, no verification inside the strategy, safe principal |
+| JWT issuance and configuration | 15 | minimal claims, explicit short expiry, issuer/audience agreement, secret from validated configuration, no fallback, startup failure, algorithm pinned |
+| Passport JWT Strategy | 15 | bearer-only extraction, signature/expiry/issuer/audience enforced, `sub` validated, current user loaded from PostgreSQL, deleted user → 401, principal built from the database, no untrusted claims |
+| Authentication guards and protected endpoints | 10 | both guards correct, handlers never run on failure, `/auth/me` and `/auth/protected` correct, public Task 1–3 routes untouched |
+| CurrentUser decorator and module architecture | 5 | decorator behaviour and use, `UsersModule`/`AuthModule` boundaries, DI, exports, no repository in controllers, no circular imports |
+| Error handling and information disclosure | 5 | consistent envelope, 401 vs 403 vs 404 used correctly, identical unknown-email / wrong-password response, no internals leaked |
+| Unit, integration and E2E tests | 10 | all provided suites green, tests untouched, any extra tests meaningful and isolated |
+| Code quality and maintainability | 5 | naming, small focused methods, consistency with the codebase, comments only where they add value |
 
-Passing tests alone does not guarantee 100: the review looks at fail-closed behaviour, metadata semantics and the answers to the design questions in `HINTS.md` (level 4).
+Passing tests alone does not guarantee 100: the review looks at architecture, security assumptions, dependency injection and error handling, and you should be able to defend each decision (why Argon2id, why `sub` only, why the user is reloaded, where login validation happens).
 
 ## Critical security failures
 
 Any of these means the assignment is **not complete**, whatever the test results (the score is capped at 59):
 
-- a role, permission or user id taken from the token claims, body, query string or headers
-- a protected route that answers 2xx to an anonymous or under-privileged caller
-- authorization implemented as `if (user.role …)` in controllers or services instead of metadata + guards
-- a guard that fails open (an error, a missing user or an unknown role lets the request through)
-- `passwordHash` (or any credential) in a response
-- a MANAGER able to create or promote an ADMIN, or a USER able to promote themselves
-- the provided tests edited to make them pass
-- Task 3 or Task 4 migrations edited or existing data dropped
+- a plaintext password, or the hash, stored in a place it should not be, returned by any endpoint, put in a token, or written to a log
+- passwords hashed with a fast general-purpose hash, or encrypted reversibly
+- a JWT secret hard-coded in source, committed, or silently defaulted when configuration is missing
+- tokens accepted without signature or expiry verification (including `alg: none`), or accepted from the query string
+- identity taken from the request body, query string or an unverified token claim
+- login responses that reveal whether an email exists
+- a `.env` containing real credentials committed
+- a "logout" or "roles" feature that pretends to provide revocation or authorization that does not exist
+- Task 3 migrations edited or existing data dropped
 
 **Grade bands:** 90–100 excellent · 75–89 good · 60–74 pass · < 60 redo.

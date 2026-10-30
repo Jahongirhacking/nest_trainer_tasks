@@ -5,7 +5,6 @@ import {
   loadEnvFile,
 } from './database/database.config.js';
 import { AuthModule } from './auth/auth.module.js';
-import { RbacModule } from './rbac/rbac.module.js';
 import { ProjectsModule } from './projects/projects.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
 
@@ -20,7 +19,6 @@ import { TasksModule } from './tasks/tasks.module.js';
     AuthModule,
     ProjectsModule,
     TasksModule,
-    RbacModule,
   ],
 })
 export class AppModule {}

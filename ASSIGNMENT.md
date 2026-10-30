@@ -1,206 +1,236 @@
-# Assignment 5 – Role-Based Access Control (RBAC) with NestJS Guards, Reflector and Custom Decorators
+# Assignment 4 – Secure Authentication System with NestJS, Passport, JWT and PostgreSQL
 
-**Difficulty:** Advanced
-**Builds on:** Assignment 4 (Passport + JWT, see [docs/task_4/](docs/task_4/ASSIGNMENT.md)). You reuse its login, `JwtStrategy`, `JwtAuthGuard`, `User` entity and `UsersService`. Do not rebuild them.
-**Stack:** NestJS 12, TypeScript, PostgreSQL 16, TypeORM 1.x, `@nestjs/passport` + `passport-jwt`, class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
+**Difficulty:** Medium+
+**Builds on:** Assignment 3 (TypeORM + PostgreSQL, see [docs/task_3/](docs/task_3/ASSIGNMENT.md)) and Assignment 2 (validation and the error envelope, see [docs/task_2/](docs/task_2/ASSIGNMENT.md))
+**Stack:** NestJS 12, TypeScript, PostgreSQL 16, TypeORM 1.x, Passport (`@nestjs/passport`, `passport-local`, `passport-jwt`), `@nestjs/jwt`, Argon2 (`argon2`), class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
 
-> Rule of the game: the module structure, enums, entity, DTOs, services, controllers, test helpers and tests are given. **The decorators, the guards, the role → permission matrix, the ownership rule, the assignment rule, the decisions about metadata and the wiring are yours.** Everything marked `TODO` is intentionally unfinished and fails closed (a guard that denies, a decorator that records nothing).
+> Rule of the game: the scaffolding, configuration, helpers and tests are given. **Hashing, credential checks, strategies, guards, the decorator, token issuance, configuration validation, module wiring, the entity and the migration are yours.** Everything marked `TODO` is intentionally unfinished and fails closed (HTTP 501 or a guard that denies).
 >
-> The code lives in [src/rbac/](src/rbac/) and is part of the application (`AppModule` imports `RbacModule`). The Task 5 unit/HTTP tests need **no database**; they run on in-memory repositories.
->
-> **Change to earlier tasks:** Task 3's flat routes `GET /tasks`, `GET|PATCH|DELETE /tasks/:id` were renamed `/project-tasks` and `/project-tasks/:id` (same handlers), so `/tasks` belongs to this assignment. The Task 3 e2e tests were updated accordingly; `/projects/:projectId/tasks` is unchanged.
+> This repository uses **Vitest**, not Jest (as in Tasks 1–3). Tests were written for it; do not switch runners.
 
 ## 1. Learning objectives
 
-- Authentication vs. authorization: 401 vs. 403, and which guard answers which
-- Roles vs. permissions, and why a role → permission matrix is useful
-- Custom decorators that only record **metadata**, and `@CurrentUser()` as a typed parameter decorator
-- `Reflector` and `ExecutionContext`: reading handler-level and controller-level metadata
-- Guards: ordering, fail-closed behaviour, never trusting the client
-- Resource-level authorization (ownership) vs. role-level authorization
-- Keeping authorization out of controllers
+- Authentication vs. authorization
+- Password hashing (why, which algorithm, how to verify)
+- The Passport model: strategies, `validate()`, `request.user`
+- A Local strategy for credentials and a JWT strategy for bearer tokens
+- Authentication guards and why the guard, not the controller, is the gatekeeper
+- A custom parameter decorator
+- JWT claims, signing, expiration, issuer/audience, and what a signature does *not* prove
+- Secure configuration: no default secrets, fail at startup
+- Not leaking information through error messages
 
 ## 2. Scope
 
-**In scope:** `Role` / `Permission` model, `@Roles()`, `@Permissions()`, `@CurrentUser()`, `RolesGuard`, `PermissionsGuard`, `TaskOwnerGuard`, the matrix, metadata rules, wiring, a `role` column on `users`, a migration.
+**In scope:** registration, email/password login, Argon2 hashing, Local strategy, JWT access tokens, JWT strategy, guards, `GET /auth/me`, `CurrentUser`, protected endpoints, auth error handling, security configuration.
 
-**Out of scope (do not build them):** refresh tokens, token revocation, a permissions admin UI, multi-tenancy. The Task 1–3 routes (`/projects`, `/projects/:projectId/tasks`, `/project-tasks…`) are not changed.
+**Out of scope (do not build them, do not fake them):** roles/permissions/RBAC (Assignment 5), refresh tokens, token revocation/blacklist, email verification, password reset, social login/OAuth, MFA, sessions, microservices. The Task 1–3 endpoints (`/projects`, `/tasks`) stay public; protecting them is not part of this task.
 
-## 3. Business rules
-
-| | ADMIN | MANAGER | USER |
-|---|---|---|---|
-| Users | list, create, update, delete | list only | – (own profile via `GET /auth/me`) |
-| Tasks | list all, create, update, delete, assign | list all, create, update, assign **to USER accounts only** | see tasks assigned to them, change the **status** of their own tasks |
-| Roles / permissions | manage | **cannot** | **cannot** |
-
-"Own task" means the task's `assigneeId` equals the caller's id.
-
-### Role and permission matrix
-
-| Permission | ADMIN | MANAGER | USER |
-|---|:-:|:-:|:-:|
-| `users.read` | ✅ | ✅ | ❌ |
-| `users.create` | ✅ | ❌ | ❌ |
-| `users.update` | ✅ | ❌ | ❌ |
-| `users.delete` | ✅ | ❌ | ❌ |
-| `tasks.read` | ✅ | ✅ | ❌ |
-| `tasks.create` | ✅ | ✅ | ❌ |
-| `tasks.update` | ✅ | ✅ | ❌ |
-| `tasks.delete` | ✅ | ❌ | ❌ |
-| `tasks.assign` | ✅ | ✅ | ❌ |
-| `roles.manage` | ✅ | ❌ | ❌ |
-
-USER's abilities (own tasks) are **ownership** rules, not permissions.
-
-## 4. Architecture
+## 3. Architecture
 
 ```text
-Request
-  │
-  ▼  JwtAuthGuard ───────────── no/invalid token, or deleted user ─► 401
-  │  (Task 4: request.user = the CURRENT user from PostgreSQL, with its role)
-  ▼
-  RolesGuard / PermissionsGuard ─ reads @Roles / @Permissions with Reflector ─► 403
-  │
-  ▼  TaskOwnerGuard (only PATCH /tasks/:id/status) ─ owner or ADMIN ─► 403 / 404
-  │
-  ▼  ValidationPipe ─► 400          (authorization runs BEFORE validation)
-  ▼  Controller ─► Service ─► Repository
+HTTP request
+   │
+   ▼
+AuthController ── POST /auth/login ──► LocalAuthGuard ──► LocalStrategy
+   │                                                          │
+   │                                                          ▼
+   │                                         AuthService.validateUser()
+   │                                                          │
+   │                                          UsersService.findByEmail()
+   │                                          + password hash verification
+   │                                                          │
+   │          request.user = safe user  ◄─────────────────────┘
+   ▼
+AuthController.login() ──► AuthService.login() ──► JWT access token
+
+Protected route ──► JwtAuthGuard ──► JwtStrategy.validate(payload)
+                                          │ verify signature/exp/iss/aud (Passport)
+                                          ▼
+                                   UsersService.findById(sub)  → request.user
 ```
 
 ```text
-src/rbac/
-  rbac.module.ts  rbac.constants.ts  rbac.types.ts  role-permissions.ts   ← matrix TODO
-  enums/          role.enum.ts  permission.enum.ts  task-status.enum.ts
-  decorators/     roles.decorator.ts  permissions.decorator.ts  current-user.decorator.ts   ← TODO
-  guards/         roles.guard.ts  permissions.guard.ts  task-owner.guard.ts                  ← TODO
-  users/          rbac-users.controller.ts  rbac-users.service.ts  dto/
-  tasks/          rbac-tasks.controller.ts  rbac-tasks.service.ts  dto/  entities/rbac-task.entity.ts
-  rbac-endpoints.spec.ts  task-ownership.spec.ts  (+ role-permissions / decorators / guards specs)
-test/helpers/     rbac-app.ts  rbac-http.ts  rbac-execution-context.ts  in-memory-repository.ts
+src/
+  auth/
+    auth.module.ts  auth.controller.ts  auth.service.ts
+    auth.config.ts  auth.constants.ts
+    dto/            register.dto.ts  login.dto.ts
+    strategies/     local.strategy.ts  jwt.strategy.ts
+    guards/         local-auth.guard.ts  jwt-auth.guard.ts
+    decorators/     current-user.decorator.ts
+  users/
+    entities/user.entity.ts  users.service.ts  users.module.ts
 ```
 
-- Controllers contain **no** `if (user.role === …)`. Authorization lives in decorators + guards (and, for the assignment rule, where you decide it belongs).
-- Authentication is **already** applied (`@UseGuards(JwtAuthGuard)` on both controllers). Authorization is yours.
-- The role is read from the **database** by the Task 4 `JwtStrategy`; it is never read from the token, body or query string.
-- `RbacModule` is imported by `AppModule`. The Passport "jwt" strategy comes from `AuthModule`. Entities are picked up automatically (`autoLoadEntities`), so `migration:generate` sees `RbacTask` after `pnpm build`.
+- `UsersModule` owns user persistence (the only place that touches the `User` repository) and exports `UsersService`.
+- `AuthModule` imports `UsersModule`; it never creates a second copy of user persistence. Avoid circular imports.
+- Controllers never touch a repository. Use constructor injection; never instantiate guards or strategies yourself.
+- Provided helpers you can rely on: `JWT_CONFIG` token and `JwtConfig` / `SafeUser` types in `auth.constants.ts`, and strategy names `'local'` / `'jwt'`.
 
-## 5. Endpoints and required access
+## 4. User data model
 
-| Method | Endpoint | Required access | Success |
-|---|---|---|---|
-| GET | `/users` | ADMIN, MANAGER | 200 list (no credential fields) |
-| POST | `/users` | ADMIN | 201 |
-| PATCH | `/users/:id` | ADMIN | 200 |
-| DELETE | `/users/:id` | ADMIN | 204 |
-| GET | `/tasks` | ADMIN, MANAGER | 200 |
-| POST | `/tasks` | ADMIN, MANAGER | 201 |
-| GET | `/tasks/my` | any authenticated user | 200 (tasks assigned to the caller) |
-| PATCH | `/tasks/:id` | ADMIN, MANAGER | 200 |
-| PATCH | `/tasks/:id/status` | the task's owner (assignee) **or** ADMIN | 200 |
-| DELETE | `/tasks/:id` | ADMIN | 204 |
-| PATCH | `/tasks/:id/assign` | ADMIN, MANAGER (see "Assignment rules") | 200 |
+Table **`users`** (the tests query it by these exact names):
 
-Error semantics (same envelope as Task 2–4):
-
-| Situation | Status |
+| Column | Rules |
 |---|---|
-| no token, malformed/expired/forged token, account deleted | **401** |
-| authenticated, but the role/permission/ownership does not allow it | **403** |
-| unknown id (task/user), when the caller is allowed to ask | **404** |
-| invalid body or id format | **400** |
+| `id` | numeric, generated by the database |
+| `email` | required, **unique (database constraint)**, stored normalized (trimmed, lower case) |
+| `passwordHash` | required (`NOT NULL`), the Argon2 hash, never the password |
+| `createdAt`, `updatedAt` | database generated, `timestamptz`, never from the client |
 
-## 6. Rules you must implement and defend
+- Never return `passwordHash`; never put it in a JWT; never log passwords or hashes.
+- Keep `SafeUser` (no `passwordHash`) as the only user shape that leaves the service layer.
+- Existing `projects` / `tasks` tables are not touched.
 
-### Metadata rules
+## 5. Endpoints
 
-| | Rule |
+Error envelope for **every** error: `{ statusCode, error, message, errors? }` exactly as in Task 2/3.
+
+### `POST /auth/register`
+
+```json
+{ "email": "developer@example.com", "password": "a long passphrase here" }
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| created | **201** | safe user, e.g. `{ "id": 1, "email": "developer@example.com", "createdAt": "…", "updatedAt": "…" }` |
+| invalid body / unknown or client-controlled property | **400** | envelope with `errors[]` |
+| email already registered | **409** | envelope, no database details |
+
+### `POST /auth/login` (Local strategy)
+
+```json
+{ "email": "developer@example.com", "password": "a long passphrase here" }
+```
+
+| Outcome | Status | Body |
+|---|---|---|
+| authenticated | **200** | `{ "accessToken": "<jwt>" }` |
+| malformed body (missing/mistyped/invalid fields) | **400** | envelope with `errors[]` |
+| unknown email **or** wrong password | **401** | `{ "statusCode": 401, "error": "Unauthorized", "message": "Invalid email or password" }` – *identical* for both cases |
+
+Design challenge: Passport reads the raw body *before* pipes run. You must make a malformed body end in 400, not 401 and not 500.
+
+### `GET /auth/me` (JwtAuthGuard)
+
+`Authorization: Bearer <token>` → **200** safe user of the token's owner. Identity comes only from the validated authentication context: never from the body, query string or route. **401** when the token is missing/malformed/expired/badly signed/has wrong issuer or audience, or **its user no longer exists**.
+
+### `GET /auth/protected` (JwtAuthGuard)
+
+**200** with a minimal body (e.g. `{ "message": "…" }`, no sensitive data), **401** otherwise.
+
+### Logout
+
+There is **no** logout endpoint. Logging out is client-side: the client discards the token. A stateless JWT stays valid until it expires (or until a server-side check, like loading the user, rejects it); deleting a copy on the client does not invalidate copies elsewhere. Revocation and refresh tokens are a separate, later topic. Do not add a route that implies otherwise.
+
+## 6. DTO validation rules
+
+| Field | Rules |
 |---|---|
-| `@Roles(a, b)` | caller needs **any** of the listed roles |
-| `@Permissions(a, b)` | caller needs **all** of the listed permissions |
-| Roles: handler vs controller | the **handler-level** list **replaces** the controller-level list |
-| Permissions: handler vs controller | the two lists are **combined**; the caller needs everything in both |
-| No metadata at all | the guard lets an authenticated caller through (authentication is still required) |
-| `@Roles()` with no arguments | nobody passes (an empty requirement can never be met) |
-| Caller has no principal, or `role` is not a real `Role` (`'superadmin'`, `'ADMIN'`, `[…]`, missing) | denied |
-| A guard says no | it returns `false` (Nest answers **403**) |
+| `email` | required string, valid email, not blank; trimmed + lower-cased consistently (also inside `AuthService`, which the local strategy reaches without the DTO) |
+| `password` (register) | required string, **12–128 characters**, not whitespace-only. **Never trimmed or modified.** No composition rules (uppercase/digit/symbol) |
+| `password` (login) | required string; do not enforce the registration length policy here |
 
-ADMIN has no hidden bypass in `RolesGuard`: a route lists the roles that may use it. ADMIN's power over permissions comes from the matrix.
+Reject unknown properties; explicitly `id`, `passwordHash`, `createdAt`, `updatedAt`, `role(s)`, `permissions`, `isAdmin`. Reuse the global `ValidationPipe` from Task 2; do not duplicate rules in controllers.
 
-### Ownership rules (`PATCH /tasks/:id/status`)
+## 7. Password hashing
 
-- The owner is the user in `assigneeId`. A task assigned to nobody belongs to nobody (only ADMIN can change its status).
-- ADMIN may change any task's status. MANAGER has no special right here: a manager changes the status only of a task assigned to themselves.
-- A missing task is **404 for every caller**. (Think about what a different answer for USER would reveal.)
-- Ownership is checked **before** the body is validated: a non-owner sending a bad body gets 403, an owner sending a bad body gets 400.
-- A malformed id (`abc`, `1.5`, `0`, `1 OR 1=1`) must never produce a 5xx or a success.
+- Use **Argon2id** (`argon2` is installed; its defaults are Argon2id). Document in a short comment why you chose it if you pick something else (bcrypt is acceptable if you can justify it).
+- Hash before persisting; verify with the library's verify function; never compare strings yourself.
+- No plain SHA-256/MD5, no reversible encryption.
+- Keep hashing in plain functions you call from `AuthService` (the unit test builds `AuthService` with only `UsersService`, `JwtService` and `JWT_CONFIG`).
+- Tests never compare to a fixed hash string.
 
-### Assignment rules (`PATCH /tasks/:id/assign`)
+## 8. JWT
 
-- ADMIN may assign a task to any existing user.
-- MANAGER may assign only to accounts **whose current role is USER** (403 otherwise; the check uses the role stored now, not an old one).
-- An unknown task or an unknown assignee is 404.
+- Signed with `JWT_SECRET` (HS256 is what the helpers assume). Pin the algorithm on verification.
+- Lifetime **15 minutes** (`JWT_EXPIRES_IN=15m`); the e2e test checks `exp - iat == 900`.
+- Claims: `sub` = the user id (number or numeric string; the strategy accepts positive integers only) plus the registered claims `iat`, `exp` and, when configured, `iss` and `aud`. Nothing else without a clear purpose: no email unless you can justify it, no password/hash, no client-supplied claims, no roles.
+- `JWT_ISSUER` / `JWT_AUDIENCE` are optional **in production** but set by the test environment: when set, issue them *and* require them when verifying.
+- Token only from `Authorization: Bearer …`. Never from the query string.
 
-## 7. Implementation checklist (recommended order)
+### Configuration
 
-1. **Data:** add a `role` column to `User` (`Role`, `NOT NULL`, default `user`), remove the `UserWithRole` alias in `rbac.types.ts`, generate and **review** a migration; add a migration for `rbac_tasks`. Make sure a user created through Task 4 registration still works.
-2. **Matrix:** fill `ROLE_PERMISSIONS`.
-3. **Decorators:** `@Roles()`, `@Permissions()`, `@CurrentUser()`.
-4. **`RolesGuard`**, then **`PermissionsGuard`** (unit tests first).
-5. **Apply** them to the two controllers; keep authentication first.
-6. **`TaskOwnerGuard`** for the status route.
-7. **Assignment rule** in `RbacTasksService.assign` (or elsewhere, defend it).
-8. **Review** with the "401 or 403?" question for every row of the endpoint table.
+`buildJwtConfig()` in `auth.config.ts` (yours) reads and validates the settings and is called while the module graph is built, so a bad configuration stops the app at **startup**:
 
-## 8. Tests
+- no fallback secret in any environment; missing / empty / whitespace-only → error
+- in `NODE_ENV=production` a secret shorter than 32 characters → error
+- error messages name the variable, never its value
+
+## 9. Passport roles
+
+**LocalStrategy** (`name: 'local'`, body field `email`): hand credentials to `AuthService.validateUser()`; failure → `UnauthorizedException("Invalid email or password")` for every cause; no hash verification in the strategy; returns the safe user.
+
+**JwtStrategy** (`name: 'jwt'`): bearer extraction, signature, expiry, issuer/audience (via Passport options and `JWT_CONFIG`); `validate(payload)` rejects a malformed `sub`, loads the **current** user from PostgreSQL (deleted user → 401), returns a safe principal built from the database row, not from the token.
+
+**Guards:** `LocalAuthGuard` (strategy `local`) and `JwtAuthGuard` (strategy `jwt`). The handler must never run when authentication fails. Guards contain no password or signature logic.
+
+**`CurrentUser` decorator:** `@CurrentUser()` returns `request.user`; `@CurrentUser('email')` returns that property; if nothing authenticated the request it returns `undefined`. You must use it in `me()`; controllers should not reach into raw requests for the user.
+
+## 10. Database and migration
+
+Follow `src/migrations/README.md`. Generate one migration for `users` **after** the entity is finished, review the SQL, run it, revert it, run it again. `synchronize` stays off. Never edit Task 3 migrations. Do not drop or alter existing tables.
+
+## 11. Environment variables
+
+See `.env.example`. New: `JWT_SECRET` (required, no default), `JWT_EXPIRES_IN` (`15m`), optional `JWT_ISSUER`, `JWT_AUDIENCE`. Generate a local secret without committing it:
 
 ```bash
-nvm use                       # Node 24
-pnpm test:rbac                # the Task 5 suite (no database needed)
-pnpm test                     # all unit suites (Task 1–4 green; Task 5 red until you finish)
-pnpm test:e2e                 # needs `pnpm db:test:up`; Task 3/4 e2e must stay green
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
 ```
 
-| Test file | What it checks |
+Put it in `.env` (git-ignored). The test suites ignore `.env` auth values and use their own throw-away ones (`test/helpers/jwt.ts`).
+
+## 12. Error handling
+
+| Case | Status |
 |---|---|
-| `src/rbac/role-permissions.spec.ts` | the matrix |
-| `src/rbac/decorators/decorators.spec.ts` | metadata keys, class vs method, empty `@Roles()`, `@CurrentUser()` |
-| `src/rbac/guards/roles.guard.spec.ts` | any-of, controller vs route override, missing metadata, bad principals |
-| `src/rbac/guards/permissions.guard.spec.ts` | all-of, merge of controller + route, missing metadata, bad principals |
-| `src/rbac/rbac-endpoints.spec.ts` | every endpoint × role (401/403/2xx), no escalation through token claims, role changes take effect immediately |
-| `src/rbac/task-ownership.spec.ts` | owner/ADMIN rules, 404 vs 403, validation order, assignment rules |
+| invalid register / login body | 400 |
+| duplicate email | 409 |
+| wrong credentials, missing/malformed/expired/badly signed token, deleted user | 401 |
+| unknown route (including logout/refresh) | 404 |
 
-They run the **real** `JwtStrategy`, guards and controllers on in-memory repositories; only storage is faked. Some tests (for example "no token → 401") already pass on the starter because Task 4 authentication exists: green is not the goal, understanding why each test is red is. Do not edit the provided tests.
+401 means "not authenticated"; 403 (authenticated but forbidden) is for Assignment 5. Never expose SQL errors, hashes, secrets, stack traces or verification internals. Unexpected errors remain 500 and are logged without credentials.
 
-## 9. Definition of Done
+## 13. Security requirements (critical – see EVALUATION.md)
 
-- `pnpm test` and `pnpm test:e2e` are green; `pnpm build` and `npx tsc --noEmit` show no new errors.
-- Every row of the endpoint table holds, and you can say for each failure whether it is 401, 403 or 404 and why.
-- No role is read from the token, body, query string or headers.
-- Controllers contain no role checks; guards contain no database access except `TaskOwnerGuard`'s task lookup.
-- The migration was read, and the `role` column does not break Task 4 registration/login.
-- You can explain the metadata rules (why roles *replace* and permissions *merge*) and the "no metadata" policy, including its risk.
+1. No plaintext passwords stored, returned or logged; maintained hashing algorithm.
+2. No hash in any response or JWT.
+3. JWT signature and expiry enforced; algorithm pinned; no `alg: none`.
+4. Identity derived only from the validated token; the user is re-loaded from the database.
+5. One public login error for unknown email and wrong password.
+6. Email uniqueness enforced by PostgreSQL; concurrent duplicate registrations create one account.
+7. No hard-coded or fallback secrets; startup fails on bad configuration.
+8. No `.env` with credentials committed.
+9. No roles, refresh tokens or revocation faked.
 
-## 10. Advanced challenges (optional)
+## 14. Tests and commands
 
-1. Authorize with **permissions** instead of roles on every route.
-2. Support **multiple roles per user** (many-to-many); decide what "any of" and the matrix mean now.
-3. Model **role → permission** in the database with TypeORM relations.
-4. Load **dynamic permissions** from the database (and think about caching and invalidation).
-5. A reusable **`@Public()`** decorator.
-6. A **global** authorization guard (`APP_GUARD`); decide the default for routes without metadata (secure by default).
-7. Resolve **metadata inheritance and override** for a custom base controller.
-8. Write your own **unit tests for guards** and **integration tests** against PostgreSQL.
-9. Stop an ADMIN from demoting or deleting the **last remaining admin** (or themselves).
-10. Replace the in-memory test fixture with PostgreSQL-backed e2e tests for the Task 5 endpoints (`test/*.e2e-spec.ts`).
+| Command | What it runs |
+|---|---|
+| `pnpm test` | all unit tests (Tasks 1–4; no database) |
+| `pnpm test:auth` | only the auth/users unit tests |
+| `pnpm test:integration` | database tests (`users` constraints included), needs `pnpm db:test:up` |
+| `pnpm test:e2e` | all e2e tests, real app + test database |
+| `pnpm test:auth:e2e` | only the auth e2e tests |
+| `pnpm lint`, `pnpm build` | lint and compile |
 
-## 11. Security failures that cap the score at 59
+Do not edit the provided tests. They never mock the database, Passport or JWT in the e2e suites, and the destructive setup refuses to run unless the database name ends in `_test`.
 
-- a role, permission or user id taken from the token claims, body, query string or headers
-- a route that should be protected but answers 2xx to an anonymous or under-privileged caller
-- authorization written as `if (user.role …)` inside controllers or services instead of metadata + guards
-- a guard that fails **open** (returns `true` on an error, a missing user or an unknown role)
-- a response that contains `passwordHash`
-- a MANAGER able to create/promote an ADMIN, or a USER able to promote themselves
-- editing the provided tests to make them pass
+### Expected state on the untouched scaffold
+
+- `pnpm build` and `pnpm lint` pass; all Task 1–3 tests still pass.
+- Auth unit tests, `test/auth*.e2e-spec.ts` and `test/integration/users.int-spec.ts` **fail** (501 / missing `users` table). That is the assignment.
+- A few negative tests (no logout route, no refresh route, error bodies without internals, malformed login body → 400) already pass on the scaffold, because the scaffold fails closed or the undecorated DTO rejects every field. They guard against regressions; they do not prove your work.
+
+## 15. Acceptance criteria
+
+- [ ] Registration, login, `/auth/me`, `/auth/protected` behave exactly as specified.
+- [ ] All provided tests pass unmodified, including the production-configuration tests.
+- [ ] `users` migration reviewed, reversible, without side effects on Task 3 tables.
+- [ ] No critical security failure from EVALUATION.md.
+- [ ] You can explain: why a valid signature is not enough, why guards run before pipes, why the login error is generic.
+
+Suggested order: entity + migration → `UsersService` → `auth.config.ts` → `AuthService` → DTOs → `LocalStrategy` + guard → login → `JwtStrategy` + guard → `CurrentUser` → `/auth/me`. The first file to open is `src/users/entities/user.entity.ts`.

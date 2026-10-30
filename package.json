@@ -22,7 +22,6 @@
     "test:dto": "vitest run src/projects/dto src/tasks/dto",
     "test:e2e": "pnpm build && vitest run --config ./vitest.config.e2e.ts",
     "test:integration": "pnpm build && vitest run --config ./vitest.config.integration.ts",
-    "test:rbac": "vitest run src/rbac",
     "test:auth": "vitest run src/auth src/users",
     "test:auth:e2e": "pnpm build && vitest run --config ./vitest.config.e2e.ts test/auth",
     "test:all": "pnpm test && pnpm test:integration && pnpm test:e2e",

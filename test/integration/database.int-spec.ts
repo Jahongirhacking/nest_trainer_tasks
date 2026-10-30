@@ -221,7 +221,7 @@ describe('PostgreSQL integration', () => {
 
       const projects = (await http(app).get('/projects').expect(200)).body;
       expect(projects.map((p: { name: string }) => p.name)).toContain('Durable');
-      const reloaded = (await http(app).get(`/project-tasks/${task.id}`).expect(200)).body;
+      const reloaded = (await http(app).get(`/tasks/${task.id}`).expect(200)).body;
       expect(reloaded).toMatchObject({ title: 'Still here', projectId: project.id });
     });
   });
