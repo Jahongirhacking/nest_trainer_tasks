@@ -215,13 +215,13 @@ describe('Projects API (e2e, PostgreSQL)', () => {
       const task = await createTask(app, project.id);
       expectApiError(await http(app).delete(`/projects/${project.id}`), 409);
       await http(app).get(`/projects/${project.id}`).expect(200);
-      await http(app).get(`/tasks/${task.id}`).expect(200);
+      await http(app).get(`/project-tasks/${task.id}`).expect(200);
     });
 
     it('succeeds once the last task has been removed', async () => {
       const project = await createProject(app);
       const task = await createTask(app, project.id);
-      await http(app).delete(`/tasks/${task.id}`).expect(204);
+      await http(app).delete(`/project-tasks/${task.id}`).expect(204);
       await http(app).delete(`/projects/${project.id}`).expect(204);
     });
   });

@@ -118,6 +118,6 @@ export async function missingTaskId(
 ): Promise<number> {
   const project = await createProject(app);
   const task = await createTask(app, project.id);
-  await http(app).delete(`/tasks/${task.id}`).expect(204);
+  await http(app).delete(`/project-tasks/${task.id}`).expect(204);
   return task.id;
 }

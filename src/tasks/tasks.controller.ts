@@ -20,10 +20,10 @@ import { TasksService } from './tasks.service.js';
  * Routes (ASSIGNMENT.md, "API"):
  *   POST   /projects/:projectId/tasks   -> create
  *   GET    /projects/:projectId/tasks   -> findAllByProject
- *   GET    /tasks                       -> findAll
- *   GET    /tasks/:id                   -> findOne
- *   PATCH  /tasks/:id                   -> update
- *   DELETE /tasks/:id                   -> remove
+ *   GET    /project-tasks               -> findAll
+ *   GET    /project-tasks/:id           -> findOne
+ *   PATCH  /project-tasks/:id           -> update
+ *   DELETE /project-tasks/:id           -> remove
  *
  * TODO: Replace @Injectable() with @Controller(...) (the two route prefixes
  *       differ: choose how to express that, e.g. an empty prefix with full
@@ -50,17 +50,17 @@ export class TasksController {
     return this.tasksService.findAllByProject(_projectId);
   }
 
-  @Get('tasks')
+  @Get('project-tasks')
   findAll(): Promise<Task[]> {
     return this.tasksService.findAll();
   }
 
-  @Get('tasks/:id')
+  @Get('project-tasks/:id')
   findOne(@PositiveIntParam('id') _id: number): Promise<Task> {
     return this.tasksService.findOne(_id);
   }
 
-  @Patch('tasks/:id')
+  @Patch('project-tasks/:id')
   update(
     @PositiveIntParam('id') _id: number,
     @Body() _dto: UpdateTaskDto,
@@ -68,7 +68,7 @@ export class TasksController {
     return this.tasksService.update(_id, _dto);
   }
 
-  @Delete('tasks/:id')
+  @Delete('project-tasks/:id')
   @HttpCode(204)
   remove(@PositiveIntParam('id') _id: number): Promise<void> {
     return this.tasksService.remove(_id);
