@@ -1,14 +1,14 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import type { User } from '../users/entities/user.entity.js';
 import { UsersService } from '../users/users.service.js';
 import { type SafeUser } from './auth.constants.js';
 import type { RegisterDto } from './dto/register.dto.js';
 
-const skipSecretFields = (obj: Object, secretFieldNames: string[]) => {
-  return Object.fromEntries(
-    Object.entries(obj).filter((i) => !secretFieldNames.includes(i[0])),
-  ) as SafeUser;
+const toSafeUser = (user: User) => {
+  const { passwordHash, ...safeUser } = user;
+  return safeUser;
 };
 
 /**
@@ -40,10 +40,10 @@ export class AuthService {
       type: argon2.argon2id,
     });
     const user = await this.usersService.create({
-      email: _dto.email,
+      email: _dto.email.trim().toLowerCase(),
       passwordHash,
     });
-    return skipSecretFields(user, ['passwordHash']) as SafeUser;
+    return toSafeUser(user);
   }
 
   /**
@@ -58,8 +58,8 @@ export class AuthService {
       _email.trim().toLowerCase(),
     );
     if (!user || !(await argon2.verify(user.passwordHash, _password)))
-      throw new UnauthorizedException('Login or password is incorrect');
-    return skipSecretFields(user, ['passwordHash']) as SafeUser;
+      return null;
+    return toSafeUser(user);
   }
 
   /** Issues the access token for an ALREADY authenticated user. */

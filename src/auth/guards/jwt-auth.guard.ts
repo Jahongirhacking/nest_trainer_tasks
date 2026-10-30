@@ -1,8 +1,6 @@
-import {
-  CanActivate,
-  Injectable,
-  NotImplementedException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { JWT_STRATEGY } from '../auth.constants.js';
 
 /**
  * Protects endpoints with the "jwt" strategy.
@@ -14,8 +12,4 @@ import {
  *       requests get the principal on the request.
  */
 @Injectable()
-export class JwtAuthGuard implements CanActivate {
-  canActivate(): boolean {
-    throw new NotImplementedException('TODO: JwtAuthGuard');
-  }
-}
+export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {}

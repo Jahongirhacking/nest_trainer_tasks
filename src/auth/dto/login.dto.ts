@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsString } from 'class-validator';
+import { IsEmail, IsString, Matches } from 'class-validator';
 
 /**
  * Payload for POST /auth/login.
@@ -18,5 +18,6 @@ export class LoginDto {
   )
   email: string;
   @IsString()
+  @Matches(/\S/)
   password: string;
 }

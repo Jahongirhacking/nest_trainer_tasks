@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsString } from 'class-validator';
+import { IsEmail, IsString, Length, Matches } from 'class-validator';
 
 /**
  * Payload for POST /auth/register.
@@ -15,5 +15,7 @@ export class RegisterDto {
   )
   email: string;
   @IsString()
+  @Length(12, 128)
+  @Matches(/\S/)
   password: string;
 }

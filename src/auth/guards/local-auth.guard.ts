@@ -1,8 +1,6 @@
-import {
-  CanActivate,
-  Injectable,
-  NotImplementedException,
-} from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { LOCAL_STRATEGY } from '../auth.constants.js';
 
 /**
  * Runs the "local" strategy for POST /auth/login.
@@ -14,8 +12,4 @@ import {
  *       authenticated principal on the request.
  */
 @Injectable()
-export class LocalAuthGuard implements CanActivate {
-  canActivate(): boolean {
-    throw new NotImplementedException('TODO: LocalAuthGuard');
-  }
-}
+export class LocalAuthGuard extends AuthGuard(LOCAL_STRATEGY) {}

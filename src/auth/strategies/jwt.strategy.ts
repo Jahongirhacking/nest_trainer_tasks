@@ -32,15 +32,41 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
     @Inject(JWT_CONFIG) private readonly jwtConfig: JwtConfig,
     private readonly usersService: UsersService,
   ) {
+    const bearer = ExtractJwt.fromAuthHeaderAsBearerToken();
+
+    const requireExp = (req: Request): string | null => {
+      const token = bearer(req);
+      if (!token) return null;
+      try {
+        const payload = JSON.parse(
+          Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+        );
+        return typeof payload?.exp === 'number' ? token : null;
+      } catch {
+        return null;
+      }
+    };
+
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: requireExp,
       secretOrKey: jwtConfig.secret,
+      audience: jwtConfig.audience,
+      issuer: jwtConfig.issuer,
+      ignoreExpiration: false,
+      algorithms: ['HS256'],
     });
   }
 
   async validate(_payload: JwtPayload): Promise<SafeUser> {
+    const id =
+      typeof _payload.sub === 'string' && /^[1-9]\d*$/.test(_payload.sub)
+        ? Number(_payload.sub)
+        : _payload.sub;
+
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0)
+      throw new UnauthorizedException();
     const user = await this.usersService.findById(Number(_payload.sub));
-    if (!user) throw new UnauthorizedException('Validation failed');
+    if (!user) throw new UnauthorizedException();
     return Object.fromEntries(
       Object.entries(user).filter((i) => i[0] !== 'passwordHash'),
     ) as SafeUser;

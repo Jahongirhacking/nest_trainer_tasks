@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { isUniqueViolation } from '../common/database/postgres-errors.js';
 import { User } from './entities/user.entity.js';
 
 /**
@@ -29,19 +30,27 @@ export class UsersService {
       email: _data.email,
       passwordHash: _data.passwordHash,
     });
-    return this.usersRepository.save(user);
+    try {
+      return await this.usersRepository.save(user);
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw new ConflictException('Email is already registered');
+      throw error;
+    }
   }
 
   /** Exact match on the stored (already normalized) email, or null. */
-  findByEmail(_email: string): Promise<User | null> {
-    const user = this.usersRepository.findOne({ where: { email: _email } });
-    if (!user) null;
+  async findByEmail(_email: string): Promise<User | null> {
+    const user = await this.usersRepository.findOne({
+      where: { email: _email },
+    });
+    if (!user) return null;
     return user;
   }
 
-  findById(_id: number): Promise<User | null> {
-    const user = this.usersRepository.findOne({ where: { id: _id } });
-    if (!user) null;
+  async findById(_id: number): Promise<User | null> {
+    const user = await this.usersRepository.findOne({ where: { id: _id } });
+    if (!user) return null;
     return user;
   }
 }

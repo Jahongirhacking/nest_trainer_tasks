@@ -20,10 +20,14 @@ import type { JwtConfig } from './auth.constants.js';
 export function buildJwtConfig(
   _env: NodeJS.ProcessEnv = process.env,
 ): JwtConfig {
+  const secret = _env.JWT_SECRET?.trim();
+  if (!secret) throw new Error('JWT_SECRET environment variable is required');
+  if (_env.NODE_ENV === 'production' && secret.length < 32)
+    throw new Error('JWT_SECRET must be at least 32 characters in production');
   return {
-    secret: _env.JWT_SECRET as string,
-    expiresIn: _env.JWT_EXPIRES_IN as string,
-    issuer: _env.JWT_ISSUER as string,
-    audience: _env.JWT_AUDIENCE as string,
+    secret,
+    expiresIn: _env.JWT_EXPIRES_IN?.trim() || '15m',
+    issuer: _env.JWT_ISSUER?.trim() || undefined,
+    audience: _env.JWT_AUDIENCE?.trim() || undefined,
   };
 }

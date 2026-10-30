@@ -1,14 +1,11 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import {
-  JWT_STRATEGY,
-  LOCAL_STRATEGY,
-  type SafeUser,
-} from './auth.constants.js';
+import { type SafeUser } from './auth.constants.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { LocalAuthGuard } from './guards/local-auth.guard.js';
 
 /**
  * NOTE: scaffolding. Every handler answers HTTP 501 until you implement it.
@@ -33,7 +30,7 @@ export class AuthController {
     return this.authService.register(_dto);
   }
 
-  @UseGuards(AuthGuard(LOCAL_STRATEGY))
+  @UseGuards(LocalAuthGuard)
   @Post('login')
   login(
     @Body() _dto: LoginDto,
@@ -42,13 +39,13 @@ export class AuthController {
     return this.authService.login(user);
   }
 
-  @UseGuards(AuthGuard(JWT_STRATEGY))
+  @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@CurrentUser() user: SafeUser): SafeUser {
     return user;
   }
 
-  @UseGuards(AuthGuard(JWT_STRATEGY))
+  @UseGuards(JwtAuthGuard)
   @Get('protected')
   protected(): { message: string } {
     return { message: 'This is a secret!!!' };
