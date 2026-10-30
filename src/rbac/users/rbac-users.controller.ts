@@ -10,6 +10,12 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PositiveIntParam } from '../../common/decorators/positive-int-param.decorator.js';
+import { Permissions } from '../decorators/permissions.decorator.js';
+import { Roles } from '../decorators/roles.decorator.js';
+import { Permission } from '../enums/permission.enum.js';
+import { Role } from '../enums/role.enum.js';
+import { PermissionsGuard } from '../guards/permissions.guard.js';
+import { RolesGuard } from '../guards/roles.guard.js';
 import type { ManagedUser } from '../rbac.types.js';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto.js';
 import { UpdateManagedUserDto } from './dto/update-managed-user.dto.js';
@@ -34,21 +40,27 @@ import { RbacUsersService } from './rbac-users.service.js';
  *       role-management operation: think about what that means for the access
  *       rules and the matrix (README "Role and permission matrix").
  */
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('users')
 export class RbacUsersController {
   constructor(private readonly usersService: RbacUsersService) {}
 
+  @Roles(Role.ADMIN, Role.MANAGER)
+  @Permissions(Permission.USERS_READ)
   @Get()
   findAll(): Promise<ManagedUser[]> {
     return this.usersService.findAll();
   }
 
+  @Roles(Role.ADMIN)
+  @Permissions(Permission.USERS_CREATE)
   @Post()
   create(@Body() dto: CreateManagedUserDto): Promise<ManagedUser> {
     return this.usersService.create(dto);
   }
 
+  @Roles(Role.ADMIN)
+  @Permissions(Permission.USERS_UPDATE)
   @Patch(':id')
   update(
     @PositiveIntParam('id') id: number,
@@ -57,6 +69,8 @@ export class RbacUsersController {
     return this.usersService.update(Number(id), dto);
   }
 
+  @Roles(Role.ADMIN)
+  @Permissions(Permission.USERS_DELETE)
   @Delete(':id')
   @HttpCode(204)
   async remove(@PositiveIntParam('id') id: number): Promise<void> {

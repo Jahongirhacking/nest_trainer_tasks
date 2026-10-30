@@ -15,6 +15,11 @@ import type { AuthenticatedUser } from '../rbac.types.js';
  *       read what the authentication guard attached to the request.
  */
 export const CurrentUser = createParamDecorator(
-  (_property: keyof AuthenticatedUser | undefined, _context: ExecutionContext) =>
-    undefined,
+  (
+    _property: keyof AuthenticatedUser | undefined,
+    _context: ExecutionContext,
+  ) => {
+    const req = _context.switchToHttp().getRequest();
+    return _property ? req.user?.[_property] : req.user;
+  },
 );

@@ -1,4 +1,6 @@
+import { SetMetadata } from '@nestjs/common';
 import type { Role } from '../enums/role.enum.js';
+import { ROLES_KEY } from '../rbac.constants.js';
 
 /**
  * `@Roles(Role.ADMIN, Role.MANAGER)` - declares which roles may reach a route
@@ -12,6 +14,5 @@ import type { Role } from '../enums/role.enum.js';
  *       when the decorator is called with no arguments (see README, "Metadata
  *       rules").
  */
-export const Roles = (..._roles: Role[]): MethodDecorator & ClassDecorator => {
-  return () => undefined;
-};
+export const Roles = (..._roles: Role[]): MethodDecorator & ClassDecorator =>
+  SetMetadata(ROLES_KEY, _roles);

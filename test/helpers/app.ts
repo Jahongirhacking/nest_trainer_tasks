@@ -118,6 +118,30 @@ export async function missingTaskId(
 ): Promise<number> {
   const project = await createProject(app);
   const task = await createTask(app, project.id);
-  await http(app).delete(`/project-tasks/${task.id}`).expect(204);
+  await deleteTaskRow(app, task.id);
   return task.id;
+}
+
+/** Raw rows of the `tasks` table (the flat read/delete routes no longer exist). */
+export async function taskRows(
+  app: INestApplication<App>,
+): Promise<Record<string, any>[]> {
+  return app.get(DataSource).query(`SELECT * FROM "tasks" ORDER BY "id"`);
+}
+
+export async function findTaskRow(
+  app: INestApplication<App>,
+  id: number,
+): Promise<Record<string, any> | undefined> {
+  const rows: Record<string, any>[] = await app
+    .get(DataSource)
+    .query(`SELECT * FROM "tasks" WHERE "id" = $1`, [id]);
+  return rows[0];
+}
+
+export async function deleteTaskRow(
+  app: INestApplication<App>,
+  id: number,
+): Promise<void> {
+  await app.get(DataSource).query(`DELETE FROM "tasks" WHERE "id" = $1`, [id]);
 }

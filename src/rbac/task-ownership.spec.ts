@@ -1,5 +1,5 @@
 import { Role } from './enums/role.enum.js';
-import { TaskStatus } from './enums/task-status.enum.js';
+import { TaskStatus } from '../tasks/enums/task-status.enum.js';
 import { call, type Method } from '../../test/helpers/rbac-http.js';
 import { createFixture, ids, type Fixture } from '../../test/helpers/rbac-app.js';
 
@@ -35,6 +35,15 @@ describe('task ownership and assignment', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe(TaskStatus.DONE);
       expect(statusOf(mine)).toBe(TaskStatus.DONE);
+    });
+
+    it('keeps `completed` in sync with the status', async () => {
+      await call(f, 'patch', `/tasks/${mine}/status`, ids.user, done);
+      expect(f.tasks.rows.find((t) => t.id === mine)!.completed).toBe(true);
+      await call(f, 'patch', `/tasks/${mine}/status`, ids.user, {
+        status: TaskStatus.IN_PROGRESS,
+      });
+      expect(f.tasks.rows.find((t) => t.id === mine)!.completed).toBe(false);
     });
 
     it('USER cannot update the status of another user\'s task (403)', async () => {

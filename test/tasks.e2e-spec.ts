@@ -7,8 +7,8 @@ import {
   createTestApp,
   http,
   missingProjectId,
-  missingTaskId,
   resetDatabase,
+  taskRows,
   type TaskBody,
 } from './helpers/app.js';
 
@@ -67,7 +67,7 @@ describe('Tasks API (e2e, PostgreSQL)', () => {
     it('returns 404 when the project does not exist and stores nothing', async () => {
       const id = await missingProjectId(app);
       expectApiError(await http(app).post(`/projects/${id}/tasks`).send({ title: 'Orphan' }), 404);
-      expect((await http(app).get('/project-tasks').expect(200)).body).toEqual([]);
+      expect(await taskRows(app)).toEqual([]);
     });
 
     it.each(['abc', '0', '-3', '2.5'])('returns 400 for projectId "%s"', async (id) => {
@@ -89,7 +89,7 @@ describe('Tasks API (e2e, PostgreSQL)', () => {
       const project = await createProject(app);
       const res = await http(app).post(`/projects/${project.id}/tasks`).send(body);
       expectApiError(res, 400, { fields: true });
-      expect((await http(app).get('/project-tasks').expect(200)).body).toEqual([]);
+      expect(await taskRows(app)).toEqual([]);
     });
 
     it('rejects a body-supplied projectId even if the route project exists', async () => {
@@ -125,141 +125,6 @@ describe('Tasks API (e2e, PostgreSQL)', () => {
 
     it('returns 400 for a malformed project id', async () => {
       expectApiError(await http(app).get('/projects/abc/tasks'), 400);
-    });
-  });
-
-  describe('GET /project-tasks', () => {
-    it('returns an empty array when there are no tasks', async () => {
-      expect((await http(app).get('/project-tasks').expect(200)).body).toEqual([]);
-    });
-
-    it('returns tasks of every project', async () => {
-      const a = await createProject(app);
-      const b = await createProject(app);
-      const t1 = await createTask(app, a.id);
-      const t2 = await createTask(app, b.id);
-      const res = await http(app).get('/project-tasks').expect(200);
-      expect((res.body as TaskBody[]).map((t) => t.id).sort((x, y) => x - y)).toEqual([t1.id, t2.id].sort((x, y) => x - y));
-    });
-  });
-
-  describe('GET /project-tasks/:id', () => {
-    it('returns the task', async () => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id, { description: 'd' });
-      const res = await http(app).get(`/project-tasks/${task.id}`).expect(200);
-      expectTaskShape(res.body);
-      expect(res.body).toMatchObject({ id: task.id, projectId: project.id, description: 'd' });
-    });
-
-    it.each(['abc', '0', '-1', '1.5'])('returns 400 for id "%s"', async (id) => {
-      expectApiError(await http(app).get(`/project-tasks/${id}`), 400);
-    });
-
-    it('returns 404 for a missing task', async () => {
-      const id = await missingTaskId(app);
-      expectApiError(await http(app).get(`/project-tasks/${id}`), 404);
-    });
-  });
-
-  describe('PATCH /project-tasks/:id', () => {
-    it('updates title, description and completed', async () => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id);
-      const res = await http(app)
-        .patch(`/project-tasks/${task.id}`)
-        .send({ title: 'Renamed', description: 'Changed', completed: true })
-        .expect(200);
-      expectTaskShape(res.body);
-      expect(res.body).toMatchObject({
-        id: task.id,
-        title: 'Renamed',
-        description: 'Changed',
-        completed: true,
-        projectId: project.id,
-      });
-      const reread = await http(app).get(`/project-tasks/${task.id}`).expect(200);
-      expect(reread.body.completed).toBe(true);
-    });
-
-    it('updates a single field only', async () => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id, { description: 'keep' });
-      const res = await http(app).patch(`/project-tasks/${task.id}`).send({ completed: true }).expect(200);
-      expect(res.body).toMatchObject({ title: task.title, description: 'keep', completed: true });
-    });
-
-    it('moves updatedAt forward and keeps createdAt', async () => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id);
-      await new Promise((r) => setTimeout(r, 20));
-      const res = await http(app).patch(`/project-tasks/${task.id}`).send({ completed: true }).expect(200);
-      expect(res.body.createdAt).toBe(task.createdAt);
-      expect(Date.parse(res.body.updatedAt)).toBeGreaterThan(Date.parse(task.updatedAt));
-    });
-
-    it.each([
-      ['an empty body', {}],
-      ['an empty title', { title: '' }],
-      ['a too-long title', { title: 'a'.repeat(101) }],
-      ['a too-long description', { description: 'a'.repeat(501) }],
-      ['a non-boolean completed', { completed: 'yes' }],
-      ['an unknown property', { x: 1 }],
-      ['client-provided id', { id: 99 }],
-      ['client-provided projectId', { projectId: 99 }],
-      ['client-provided createdAt', { createdAt: '2000-01-01' }],
-      ['client-provided updatedAt', { updatedAt: '2000-01-01' }],
-    ])('rejects %s with 400', async (_label, body) => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id);
-      expectApiError(await http(app).patch(`/project-tasks/${task.id}`).send(body), 400);
-      const reread = await http(app).get(`/project-tasks/${task.id}`).expect(200);
-      expect(reread.body).toMatchObject({ title: task.title, projectId: project.id });
-    });
-
-    it('does not allow moving a task to another project', async () => {
-      const a = await createProject(app);
-      const b = await createProject(app);
-      const task = await createTask(app, a.id);
-      await http(app).patch(`/project-tasks/${task.id}`).send({ projectId: b.id }).expect(400);
-      expect((await http(app).get(`/project-tasks/${task.id}`).expect(200)).body.projectId).toBe(a.id);
-    });
-
-    it('returns 400 for a malformed id', async () => {
-      expectApiError(await http(app).patch('/project-tasks/abc').send({ completed: true }), 400);
-    });
-
-    it('returns 404 for a missing task', async () => {
-      const id = await missingTaskId(app);
-      expectApiError(await http(app).patch(`/project-tasks/${id}`).send({ completed: true }), 404);
-    });
-  });
-
-  describe('DELETE /project-tasks/:id', () => {
-    it('deletes the task (204) and keeps the project', async () => {
-      const project = await createProject(app);
-      const task = await createTask(app, project.id);
-      const res = await http(app).delete(`/project-tasks/${task.id}`).expect(204);
-      expect(res.text).toBe('');
-      expectApiError(await http(app).get(`/project-tasks/${task.id}`), 404);
-      await http(app).get(`/projects/${project.id}`).expect(200);
-    });
-
-    it('does not delete sibling tasks', async () => {
-      const project = await createProject(app);
-      const keep = await createTask(app, project.id);
-      const drop = await createTask(app, project.id);
-      await http(app).delete(`/project-tasks/${drop.id}`).expect(204);
-      await http(app).get(`/project-tasks/${keep.id}`).expect(200);
-    });
-
-    it('returns 400 for a malformed id', async () => {
-      expectApiError(await http(app).delete('/project-tasks/abc'), 400);
-    });
-
-    it('returns 404 for a missing task', async () => {
-      const id = await missingTaskId(app);
-      expectApiError(await http(app).delete(`/project-tasks/${id}`), 404);
     });
   });
 });

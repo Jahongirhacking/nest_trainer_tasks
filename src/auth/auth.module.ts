@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { loadEnvFile } from 'process';
 import { UsersModule } from '../users/users.module.js';
@@ -27,7 +27,16 @@ import { LocalStrategy } from './strategies/local.strategy.js';
     JwtModule.registerAsync({
       useFactory: () => {
         loadEnvFile();
-        return buildJwtConfig();
+        const { secret, expiresIn, issuer, audience } = buildJwtConfig();
+        return {
+          secret,
+          signOptions: {
+            algorithm: 'HS256' as const,
+            expiresIn: expiresIn as JwtSignOptions['expiresIn'],
+            ...(issuer && { issuer }),
+            ...(audience && { audience }),
+          },
+        };
       },
     }),
   ],

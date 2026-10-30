@@ -11,7 +11,24 @@ import { Role } from './enums/role.enum.js';
  *       added later (role-permissions.spec.ts has a test for that).
  */
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
-  [Role.ADMIN]: [],
-  [Role.MANAGER]: [],
+  [Role.ADMIN]: [
+    Permission.USERS_READ,
+    Permission.USERS_CREATE,
+    Permission.USERS_UPDATE,
+    Permission.USERS_DELETE,
+    Permission.TASKS_READ,
+    Permission.TASKS_CREATE,
+    Permission.TASKS_UPDATE,
+    Permission.TASKS_DELETE,
+    Permission.TASKS_ASSIGN,
+    Permission.ROLES_MANAGE,
+  ],
+  [Role.MANAGER]: [
+    Permission.USERS_READ,
+    Permission.TASKS_READ,
+    Permission.TASKS_CREATE,
+    Permission.TASKS_UPDATE,
+    Permission.TASKS_ASSIGN,
+  ],
   [Role.USER]: [],
 };

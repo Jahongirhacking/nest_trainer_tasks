@@ -1,4 +1,6 @@
+import { SetMetadata } from '@nestjs/common';
 import type { Permission } from '../enums/permission.enum.js';
+import { PERMISSIONS_KEY } from '../rbac.constants.js';
 
 /**
  * `@Permissions(Permission.TASKS_READ, Permission.TASKS_DELETE)` - declares
@@ -11,6 +13,5 @@ import type { Permission } from '../enums/permission.enum.js';
  */
 export const Permissions = (
   ..._permissions: Permission[]
-): MethodDecorator & ClassDecorator => {
-  return () => undefined;
-};
+): MethodDecorator & ClassDecorator =>
+  SetMetadata(PERMISSIONS_KEY, _permissions);

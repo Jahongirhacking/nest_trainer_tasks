@@ -9,6 +9,8 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Project } from '../../projects/entities/project.entity.js';
+import { User } from '../../users/entities/user.entity.js';
+import { TaskStatus } from '../enums/task-status.enum.js';
 
 /**
  * TODO: Turn this class into a TypeORM entity (the starter is a plain class
@@ -34,8 +36,23 @@ export class Task {
   title: string;
   @Column({ type: 'varchar', length: 500, nullable: true })
   description?: string | null;
+  /** Kept in sync with `status`: completed === (status === 'done'). */
   @Column({ type: 'boolean', default: false })
   completed: boolean;
+  @Column({ type: 'varchar', length: 20, default: TaskStatus.TODO })
+  status: TaskStatus;
+  /** The user the task is assigned to (its "owner", Task 5), or null. */
+  @Column({ type: 'integer', nullable: true })
+  assigneeId: number | null;
+  @ManyToOne(() => User, (user) => user.tasks, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'assigneeId' })
+  assignee?: Relation<User> | null;
+  /** Who created the task through the RBAC API; null for older rows. */
+  @Column({ type: 'integer', nullable: true })
+  createdById: number | null;
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
   @UpdateDateColumn({ type: 'timestamptz' })

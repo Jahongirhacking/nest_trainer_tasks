@@ -9,6 +9,7 @@ import { ProjectsService } from '../projects/projects.service.js';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
 import { Task } from './entities/task.entity.js';
+import { TaskStatus } from './enums/task-status.enum.js';
 
 /**
  * NOTE: every body below is TEMPORARY SCAFFOLDING (HTTP 501). The Task 1/2
@@ -67,6 +68,8 @@ export class TasksService {
       throw new BadRequestException('Empty body');
     const task = await this.findOne(_id);
     Object.assign(task, changes);
+    if (completed !== undefined)
+      task.status = completed ? TaskStatus.DONE : TaskStatus.TODO;
     return this.taskRepository.save(task);
   }
 

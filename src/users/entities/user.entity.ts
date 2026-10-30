@@ -1,10 +1,14 @@
+import type { Relation } from 'typeorm';
 import {
   Column,
   CreateDateColumn,
   Entity,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Role } from '../../rbac/enums/role.enum.js';
+import { Task } from '../../tasks/entities/task.entity.js';
 
 /**
  * Table `users` (see ASSIGNMENT.md, "User data model").
@@ -36,4 +40,8 @@ export class User {
   createdAt: Date;
   @UpdateDateColumn()
   updatedAt: Date;
+  @OneToMany(() => Task, (task) => task.assignee)
+  tasks?: Relation<Task>[];
+  @Column({ enum: Role, default: Role.USER })
+  role: Role;
 }

@@ -7,6 +7,7 @@ import {
   createProject,
   createTask,
   createTestApp,
+  findTaskRow,
   http,
   resetDatabase,
 } from '../helpers/app.js';
@@ -79,7 +80,10 @@ describe('PostgreSQL integration', () => {
       const projectMeta = dataSource.getMetadata(Project);
       const taskMeta = dataSource.getMetadata(Task);
       const oneToMany = projectMeta.relations.find((r) => r.isOneToMany);
-      const manyToOne = taskMeta.relations.find((r) => r.isManyToOne);
+      // Task also has an `assignee` relation (Assignment 5): pick the project one.
+      const manyToOne = taskMeta.relations.find(
+        (r) => r.isManyToOne && r.propertyName === 'project',
+      );
       expect(oneToMany?.inverseEntityMetadata.target).toBe(Task);
       expect(manyToOne?.inverseEntityMetadata.target).toBe(Project);
     });
@@ -221,7 +225,7 @@ describe('PostgreSQL integration', () => {
 
       const projects = (await http(app).get('/projects').expect(200)).body;
       expect(projects.map((p: { name: string }) => p.name)).toContain('Durable');
-      const reloaded = (await http(app).get(`/project-tasks/${task.id}`).expect(200)).body;
+      const reloaded = await findTaskRow(app, task.id);
       expect(reloaded).toMatchObject({ title: 'Still here', projectId: project.id });
     });
   });

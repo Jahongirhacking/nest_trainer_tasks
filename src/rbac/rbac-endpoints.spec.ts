@@ -17,7 +17,7 @@ interface Endpoint {
   name: string;
   method: Method;
   url: (taskId: number) => string;
-  body?: () => object;
+  body?: (projectId: number) => object;
   /** Roles that must get through (a 2xx). Everybody else must get 403. */
   allowed: Role[];
 }
@@ -57,7 +57,7 @@ const endpoints: Endpoint[] = [
     name: 'POST /tasks',
     method: 'post',
     url: () => '/tasks',
-    body: () => ({ title: 'A new task' }),
+    body: (projectId) => ({ title: 'A new task', projectId }),
     allowed: STAFF,
   },
   {
@@ -121,7 +121,7 @@ describe('RBAC endpoints', () => {
     it.each(everyRoute.map((e) => [e.name, e] as const))(
       '%s without a token -> 401',
       async (_name, e) => {
-        const res = await call(f, e.method, e.url(taskId), undefined, e.body?.());
+        const res = await call(f, e.method, e.url(taskId), undefined, e.body?.(f.projectId));
         expect(res.status).toBe(401);
       },
     );
@@ -168,7 +168,7 @@ describe('RBAC endpoints', () => {
         c.e.method,
         c.e.url(taskId),
         accountOf[c.role],
-        c.e.body?.(),
+        c.e.body?.(f.projectId),
       );
       if (c.allowed) {
         expect(res.status).toBeGreaterThanOrEqual(200);
@@ -211,6 +211,38 @@ describe('RBAC endpoints', () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveLength(4);
       expect(JSON.stringify(res.body)).not.toMatch(/password|hash|argon2/i);
+    });
+  });
+
+  describe('POST /tasks creates a task inside a project', () => {
+    it('stores the creator, the project and a todo status', async () => {
+      const res = await call(f, 'post', '/tasks', ids.manager, {
+        title: 'Plan the sprint',
+        projectId: f.projectId,
+      });
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({
+        title: 'Plan the sprint',
+        projectId: f.projectId,
+        status: 'todo',
+        completed: false,
+        assigneeId: null,
+        createdById: ids.manager,
+      });
+    });
+
+    it('answers 400 when projectId is missing', async () => {
+      const res = await call(f, 'post', '/tasks', ids.admin, { title: 'No project' });
+      expect(res.status).toBe(400);
+    });
+
+    it('answers 404 for a project that does not exist', async () => {
+      const res = await call(f, 'post', '/tasks', ids.admin, {
+        title: 'Orphan task',
+        projectId: 9999,
+      });
+      expect(res.status).toBe(404);
+      expect(f.tasks.rows.some((t) => t.title === 'Orphan task')).toBe(false);
     });
   });
 

@@ -381,9 +381,8 @@ describe('Authentication API (e2e, PostgreSQL)', () => {
   });
 
   describe('previous assignments keep working without a token', () => {
-    it('projects and tasks stay public (authorization is a later assignment)', async () => {
+    it('projects stay public (authorization is a later assignment)', async () => {
       await http(app).get('/projects').expect(200);
-      await http(app).get('/project-tasks').expect(200);
     });
   });
 });

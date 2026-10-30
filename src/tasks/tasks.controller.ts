@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Patch,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Get, Post } from '@nestjs/common';
 import { PositiveIntParam } from '../common/decorators/positive-int-param.decorator.js';
 import { CreateTaskDto } from './dto/create-task.dto.js';
 import { UpdateTaskDto } from './dto/update-task.dto.js';
@@ -20,10 +12,9 @@ import { TasksService } from './tasks.service.js';
  * Routes (ASSIGNMENT.md, "API"):
  *   POST   /projects/:projectId/tasks   -> create
  *   GET    /projects/:projectId/tasks   -> findAllByProject
- *   GET    /project-tasks               -> findAll
- *   GET    /project-tasks/:id           -> findOne
- *   PATCH  /project-tasks/:id           -> update
- *   DELETE /project-tasks/:id           -> remove
+ *
+ * The flat routes (GET /tasks, GET|PATCH|DELETE /tasks/:id) were removed in
+ * Assignment 5: /tasks is now the RBAC-protected API in src/rbac.
  *
  * TODO: Replace @Injectable() with @Controller(...) (the two route prefixes
  *       differ: choose how to express that, e.g. an empty prefix with full
@@ -50,17 +41,16 @@ export class TasksController {
     return this.tasksService.findAllByProject(_projectId);
   }
 
-  @Get('project-tasks')
+  // Not routed: the flat task routes were replaced by the RBAC-protected
+  // `/tasks` routes (src/rbac). Kept for the unit tests and internal use.
   findAll(): Promise<Task[]> {
     return this.tasksService.findAll();
   }
 
-  @Get('project-tasks/:id')
   findOne(@PositiveIntParam('id') _id: number): Promise<Task> {
     return this.tasksService.findOne(_id);
   }
 
-  @Patch('project-tasks/:id')
   update(
     @PositiveIntParam('id') _id: number,
     @Body() _dto: UpdateTaskDto,
@@ -68,8 +58,6 @@ export class TasksController {
     return this.tasksService.update(_id, _dto);
   }
 
-  @Delete('project-tasks/:id')
-  @HttpCode(204)
   remove(@PositiveIntParam('id') _id: number): Promise<void> {
     return this.tasksService.remove(_id);
   }

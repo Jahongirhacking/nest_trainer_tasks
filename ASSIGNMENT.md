@@ -8,7 +8,7 @@
 >
 > The code lives in [src/rbac/](src/rbac/) and is part of the application (`AppModule` imports `RbacModule`). The Task 5 unit/HTTP tests need **no database**; they run on in-memory repositories.
 >
-> **Change to earlier tasks:** Task 3's flat routes `GET /tasks`, `GET|PATCH|DELETE /tasks/:id` were renamed `/project-tasks` and `/project-tasks/:id` (same handlers), so `/tasks` belongs to this assignment. The Task 3 e2e tests were updated accordingly; `/projects/:projectId/tasks` is unchanged.
+> **Changes to earlier tasks (the project has ONE `Task` entity):** Task 5 extends the Task 3 `tasks` table with `status`, `assigneeId` (the owner, FK to `users`, `ON DELETE SET NULL`) and `createdById`, via the migration `AddTaskAssignment` (given, already reviewed). Task 3's flat routes `GET /tasks`, `GET|PATCH|DELETE /tasks/:id` were **removed**: `/tasks` is now the RBAC-protected API, so there is no unauthenticated way to edit or delete a task by id. `POST|GET /projects/:projectId/tasks` still exist and are still public (a known gap, outside this assignment). The Task 3 e2e tests that used the flat routes were rewritten to read the database directly. `completed` and `status` are kept in sync (`completed === (status === 'done')`).
 
 ## 1. Learning objectives
 
@@ -24,7 +24,7 @@
 
 **In scope:** `Role` / `Permission` model, `@Roles()`, `@Permissions()`, `@CurrentUser()`, `RolesGuard`, `PermissionsGuard`, `TaskOwnerGuard`, the matrix, metadata rules, wiring, a `role` column on `users`, a migration.
 
-**Out of scope (do not build them):** refresh tokens, token revocation, a permissions admin UI, multi-tenancy. The Task 1–3 routes (`/projects`, `/projects/:projectId/tasks`, `/project-tasks…`) are not changed.
+**Out of scope (do not build them):** refresh tokens, token revocation, a permissions admin UI, multi-tenancy. The Task 1–3 routes `/projects` and `/projects/:projectId/tasks` are not changed.
 
 ## 3. Business rules
 
@@ -76,7 +76,7 @@ src/rbac/
   decorators/     roles.decorator.ts  permissions.decorator.ts  current-user.decorator.ts   ← TODO
   guards/         roles.guard.ts  permissions.guard.ts  task-owner.guard.ts                  ← TODO
   users/          rbac-users.controller.ts  rbac-users.service.ts  dto/
-  tasks/          rbac-tasks.controller.ts  rbac-tasks.service.ts  dto/  entities/rbac-task.entity.ts
+  tasks/          rbac-tasks.controller.ts  rbac-tasks.service.ts  dto/   (the entity is src/tasks/entities/task.entity.ts)
   rbac-endpoints.spec.ts  task-ownership.spec.ts  (+ role-permissions / decorators / guards specs)
 test/helpers/     rbac-app.ts  rbac-http.ts  rbac-execution-context.ts  in-memory-repository.ts
 ```
@@ -84,7 +84,7 @@ test/helpers/     rbac-app.ts  rbac-http.ts  rbac-execution-context.ts  in-memor
 - Controllers contain **no** `if (user.role === …)`. Authorization lives in decorators + guards (and, for the assignment rule, where you decide it belongs).
 - Authentication is **already** applied (`@UseGuards(JwtAuthGuard)` on both controllers). Authorization is yours.
 - The role is read from the **database** by the Task 4 `JwtStrategy`; it is never read from the token, body or query string.
-- `RbacModule` is imported by `AppModule`. The Passport "jwt" strategy comes from `AuthModule`. Entities are picked up automatically (`autoLoadEntities`), so `migration:generate` sees `RbacTask` after `pnpm build`.
+- `RbacModule` is imported by `AppModule`. The Passport "jwt" strategy comes from `AuthModule`. Entities are picked up automatically (`autoLoadEntities`), so `migration:generate` sees schema changes after `pnpm build`.
 
 ## 5. Endpoints and required access
 
@@ -95,7 +95,7 @@ test/helpers/     rbac-app.ts  rbac-http.ts  rbac-execution-context.ts  in-memor
 | PATCH | `/users/:id` | ADMIN | 200 |
 | DELETE | `/users/:id` | ADMIN | 204 |
 | GET | `/tasks` | ADMIN, MANAGER | 200 |
-| POST | `/tasks` | ADMIN, MANAGER | 201 |
+| POST | `/tasks` | ADMIN, MANAGER | 201 (body: `title`, optional `description`, required `projectId`; unknown project → 404) |
 | GET | `/tasks/my` | any authenticated user | 200 (tasks assigned to the caller) |
 | PATCH | `/tasks/:id` | ADMIN, MANAGER | 200 |
 | PATCH | `/tasks/:id/status` | the task's owner (assignee) **or** ADMIN | 200 |
@@ -144,7 +144,7 @@ ADMIN has no hidden bypass in `RolesGuard`: a route lists the roles that may use
 
 ## 7. Implementation checklist (recommended order)
 
-1. **Data:** add a `role` column to `User` (`Role`, `NOT NULL`, default `user`), remove the `UserWithRole` alias in `rbac.types.ts`, generate and **review** a migration; add a migration for `rbac_tasks`. Make sure a user created through Task 4 registration still works.
+1. **Data:** add a `role` column to `User` (`Role`, `NOT NULL`, default `user`), remove the `UserWithRole` alias in `rbac.types.ts`, generate and **review** a migration (the `tasks` migration is already given). Make sure a user created through Task 4 registration still works.
 2. **Matrix:** fill `ROLE_PERMISSIONS`.
 3. **Decorators:** `@Roles()`, `@Permissions()`, `@CurrentUser()`.
 4. **`RolesGuard`**, then **`PermissionsGuard`** (unit tests first).

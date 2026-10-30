@@ -62,13 +62,11 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
       typeof _payload.sub === 'string' && /^[1-9]\d*$/.test(_payload.sub)
         ? Number(_payload.sub)
         : _payload.sub;
-
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0)
       throw new UnauthorizedException();
     const user = await this.usersService.findById(Number(_payload.sub));
     if (!user) throw new UnauthorizedException();
-    return Object.fromEntries(
-      Object.entries(user).filter((i) => i[0] !== 'passwordHash'),
-    ) as SafeUser;
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
   }
 }

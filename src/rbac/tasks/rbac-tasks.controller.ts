@@ -16,7 +16,7 @@ import { AssignTaskDto } from './dto/assign-task.dto.js';
 import { CreateRbacTaskDto } from './dto/create-rbac-task.dto.js';
 import { UpdateRbacTaskDto } from './dto/update-rbac-task.dto.js';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto.js';
-import type { RbacTask } from './entities/rbac-task.entity.js';
+import type { Task } from '../../tasks/entities/task.entity.js';
 import { RbacTasksService } from './rbac-tasks.service.js';
 
 /**
@@ -44,7 +44,7 @@ export class RbacTasksController {
   constructor(private readonly tasksService: RbacTasksService) {}
 
   @Get()
-  findAll(): Promise<RbacTask[]> {
+  findAll(): Promise<Task[]> {
     return this.tasksService.findAll();
   }
 
@@ -52,12 +52,12 @@ export class RbacTasksController {
   create(
     @CurrentUser() actor: AuthenticatedUser,
     @Body() dto: CreateRbacTaskDto,
-  ): Promise<RbacTask> {
+  ): Promise<Task> {
     return this.tasksService.create(actor, dto);
   }
 
   @Get('my')
-  findMine(@CurrentUser() actor: AuthenticatedUser): Promise<RbacTask[]> {
+  findMine(@CurrentUser() actor: AuthenticatedUser): Promise<Task[]> {
     return this.tasksService.findAssignedTo(actor.id);
   }
 
@@ -65,7 +65,7 @@ export class RbacTasksController {
   update(
     @PositiveIntParam('id') id: number,
     @Body() dto: UpdateRbacTaskDto,
-  ): Promise<RbacTask> {
+  ): Promise<Task> {
     return this.tasksService.update(Number(id), dto);
   }
 
@@ -73,7 +73,7 @@ export class RbacTasksController {
   updateStatus(
     @PositiveIntParam('id') id: number,
     @Body() dto: UpdateTaskStatusDto,
-  ): Promise<RbacTask> {
+  ): Promise<Task> {
     return this.tasksService.updateStatus(Number(id), dto.status);
   }
 
@@ -82,7 +82,7 @@ export class RbacTasksController {
     @CurrentUser() actor: AuthenticatedUser,
     @PositiveIntParam('id') id: number,
     @Body() dto: AssignTaskDto,
-  ): Promise<RbacTask> {
+  ): Promise<Task> {
     return this.tasksService.assign(actor, Number(id), dto);
   }
 

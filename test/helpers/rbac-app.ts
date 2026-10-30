@@ -7,6 +7,8 @@ import type { App } from 'supertest/types.js';
 import { configureApp } from '../../src/app.setup.js';
 import { JWT_CONFIG } from '../../src/auth/auth.constants.js';
 import { JwtStrategy } from '../../src/auth/strategies/jwt.strategy.js';
+import { Project } from '../../src/projects/entities/project.entity.js';
+import { Task } from '../../src/tasks/entities/task.entity.js';
 import { User } from '../../src/users/entities/user.entity.js';
 import { UsersService } from '../../src/users/users.service.js';
 import {
@@ -16,9 +18,8 @@ import {
   TEST_JWT_SECRET,
 } from './jwt.js';
 import { Role } from '../../src/rbac/enums/role.enum.js';
-import { TaskStatus } from '../../src/rbac/enums/task-status.enum.js';
+import { TaskStatus } from '../../src/tasks/enums/task-status.enum.js';
 import { RbacModule } from '../../src/rbac/rbac.module.js';
-import { RbacTask } from '../../src/rbac/tasks/entities/rbac-task.entity.js';
 import { InMemoryRepository } from './in-memory-repository.js';
 
 /** Ids of the seeded accounts. */
@@ -30,6 +31,9 @@ export interface Fixture {
   app: INestApplication<App>;
   users: InMemoryRepository;
   tasks: InMemoryRepository;
+  projects: InMemoryRepository;
+  /** Id of the seeded project every seeded task belongs to. */
+  projectId: number;
   /** Inserts a task and returns it. */
   seedTask(overrides?: Record<string, unknown>): Record<string, any>;
   /** A valid access token for the user with this id (claims are minimal). */
@@ -51,6 +55,8 @@ export interface Fixture {
 export async function createFixture(): Promise<Fixture> {
   const users = new InMemoryRepository(['email']);
   const tasks = new InMemoryRepository();
+  const projects = new InMemoryRepository(['name']);
+  const project = projects.seed({ name: 'Seeded project', description: null });
   const accounts: [number, string, Role][] = [
     [ids.admin, 'admin@example.com', Role.ADMIN],
     [ids.manager, 'manager@example.com', Role.MANAGER],
@@ -75,13 +81,16 @@ export async function createFixture(): Promise<Fixture> {
         },
       },
       { provide: getRepositoryToken(User), useValue: users },
-      { provide: getRepositoryToken(RbacTask), useValue: tasks },
+      { provide: getRepositoryToken(Task), useValue: tasks },
+      { provide: getRepositoryToken(Project), useValue: projects },
     ],
   })
     .overrideProvider(getRepositoryToken(User))
     .useValue(users)
-    .overrideProvider(getRepositoryToken(RbacTask))
+    .overrideProvider(getRepositoryToken(Task))
     .useValue(tasks)
+    .overrideProvider(getRepositoryToken(Project))
+    .useValue(projects)
     .compile();
 
   const app = moduleRef.createNestApplication<INestApplication<App>>({
@@ -97,11 +106,15 @@ export async function createFixture(): Promise<Fixture> {
     app,
     users,
     tasks,
+    projects,
+    projectId: project.id,
     seedTask: (overrides = {}) =>
       tasks.seed({
         title: 'Seeded task',
         description: null,
+        projectId: project.id,
         status: TaskStatus.TODO,
+        completed: false,
         assigneeId: null,
         createdById: ids.manager,
         ...overrides,
