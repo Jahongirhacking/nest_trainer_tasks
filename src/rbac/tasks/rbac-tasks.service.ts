@@ -1,10 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ProjectsService } from '../../projects/projects.service.js';
 import { Task } from '../../tasks/entities/task.entity.js';
-import { User } from '../../users/entities/user.entity.js';
 import { TaskStatus } from '../../tasks/enums/task-status.enum.js';
+import { User } from '../../users/entities/user.entity.js';
+import { Role } from '../enums/role.enum.js';
 import type { AuthenticatedUser } from '../rbac.types.js';
 import type { AssignTaskDto } from './dto/assign-task.dto.js';
 import type { CreateRbacTaskDto } from './dto/create-rbac-task.dto.js';
@@ -82,9 +87,16 @@ export class RbacTasksService {
     dto: AssignTaskDto,
   ): Promise<Task> {
     const task = await this.findOne(id);
-    const assignee = await this.users.findOne({ where: { id: dto.assigneeId } });
+    const assignee = await this.users.findOne({
+      where: { id: dto.assigneeId },
+    });
     if (!assignee)
       throw new NotFoundException(`User ${dto.assigneeId} not found`);
+    if (
+      (_actor.role === Role.MANAGER && assignee.role !== Role.USER) ||
+      _actor.role === Role.USER
+    )
+      throw new ForbiddenException();
     task.assigneeId = assignee.id;
     return this.tasks.save(task);
   }

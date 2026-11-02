@@ -1,4 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import type { Request } from 'express';
+import { Role } from '../enums/role.enum.js';
+import { SafeUser } from '../rbac.types.js';
 import { RbacTasksService } from '../tasks/rbac-tasks.service.js';
 
 /**
@@ -24,7 +27,15 @@ import { RbacTasksService } from '../tasks/rbac-tasks.service.js';
 export class TaskOwnerGuard implements CanActivate {
   constructor(private readonly tasksService: RbacTasksService) {}
 
-  canActivate(_context: ExecutionContext): boolean | Promise<boolean> {
-    return false;
+  async canActivate(_context: ExecutionContext): Promise<boolean> {
+    const req = _context.switchToHttp().getRequest<Request>();
+    const user = req.user as SafeUser;
+    if (!user) return false;
+    if (user.role === Role.ADMIN) return true;
+    const taskId = Number(req.params.id);
+    if (!Number.isInteger(taskId) || taskId <= 0) return false;
+    const task = await this.tasksService.findOne(taskId);
+    if (!task.assigneeId || task.assigneeId !== user.id) return false;
+    return true;
   }
 }

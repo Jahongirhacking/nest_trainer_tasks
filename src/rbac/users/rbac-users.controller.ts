@@ -10,13 +10,14 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PositiveIntParam } from '../../common/decorators/positive-int-param.decorator.js';
+import { CurrentUser } from '../decorators/current-user.decorator.js';
 import { Permissions } from '../decorators/permissions.decorator.js';
 import { Roles } from '../decorators/roles.decorator.js';
 import { Permission } from '../enums/permission.enum.js';
 import { Role } from '../enums/role.enum.js';
 import { PermissionsGuard } from '../guards/permissions.guard.js';
 import { RolesGuard } from '../guards/roles.guard.js';
-import type { ManagedUser } from '../rbac.types.js';
+import type { ManagedUser, SafeUser } from '../rbac.types.js';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto.js';
 import { UpdateManagedUserDto } from './dto/update-managed-user.dto.js';
 import { RbacUsersService } from './rbac-users.service.js';
@@ -75,5 +76,10 @@ export class RbacUsersController {
   @HttpCode(204)
   async remove(@PositiveIntParam('id') id: number): Promise<void> {
     await this.usersService.remove(Number(id));
+  }
+
+  @Get('me')
+  getProfile(@CurrentUser() user: SafeUser) {
+    return user;
   }
 }
