@@ -1,206 +1,285 @@
-# Assignment 5 – Role-Based Access Control (RBAC) with NestJS Guards, Reflector and Custom Decorators
+# Assignment 6 – Request Processing System: Middleware, Interceptors, Pipes, Custom Providers and ExecutionContext
 
 **Difficulty:** Advanced
-**Builds on:** Assignment 4 (Passport + JWT, see [docs/task_4/](docs/task_4/ASSIGNMENT.md)). You reuse its login, `JwtStrategy`, `JwtAuthGuard`, `User` entity and `UsersService`. Do not rebuild them.
-**Stack:** NestJS 12, TypeScript, PostgreSQL 16, TypeORM 1.x, `@nestjs/passport` + `passport-jwt`, class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
+**Builds on:** Assignment 5 (RBAC, see [docs/task_5/](docs/task_5/ASSIGNMENT.md)). You keep its guards, roles, permissions, ownership and assignment rules exactly as they are.
+**Stack:** NestJS 12, TypeScript, RxJS 7, class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
 
-> Rule of the game: the module structure, enums, entity, DTOs, services, controllers, test helpers and tests are given. **The decorators, the guards, the role → permission matrix, the ownership rule, the assignment rule, the decisions about metadata and the wiring are yours.** Everything marked `TODO` is intentionally unfinished and fails closed (a guard that denies, a decorator that records nothing).
+> Rule of the game: the interfaces, tokens, test helpers, the sink that prints log lines, the demo routes and **all tests** are given. **The middleware, the interceptor, the two pipes, the configuration provider, the two decorators and the metadata lookup are yours.** Everything marked `TODO` is intentionally unfinished and throws `Not implemented` or returns nothing.
 >
-> The code lives in [src/rbac/](src/rbac/) and is part of the application (`AppModule` imports `RbacModule`). The Task 5 unit/HTTP tests need **no database**; they run on in-memory repositories.
->
-> **Changes to earlier tasks (the project has ONE `Task` entity):** Task 5 extends the Task 3 `tasks` table with `status`, `assigneeId` (the owner, FK to `users`, `ON DELETE SET NULL`) and `createdById`, via the migration `AddTaskAssignment` (given, already reviewed). Task 3's flat routes `GET /tasks`, `GET|PATCH|DELETE /tasks/:id` were **removed**: `/tasks` is now the RBAC-protected API, so there is no unauthenticated way to edit or delete a task by id. `POST|GET /projects/:projectId/tasks` still exist and are still public (a known gap, outside this assignment). The Task 3 e2e tests that used the flat routes were rewritten to read the database directly. `completed` and `status` are kept in sync (`completed === (status === 'done')`).
+> The new code lives in [src/common/](src/common/) (shared infrastructure, like the Task 4 pipe and filter that are already there) and a few routes in [src/rbac/tasks/](src/rbac/tasks/rbac-tasks.controller.ts). The Task 6 unit and HTTP tests need **no database**.
 
 ## 1. Learning objectives
 
-- Authentication vs. authorization: 401 vs. 403, and which guard answers which
-- Roles vs. permissions, and why a role → permission matrix is useful
-- Custom decorators that only record **metadata**, and `@CurrentUser()` as a typed parameter decorator
-- `Reflector` and `ExecutionContext`: reading handler-level and controller-level metadata
-- Guards: ordering, fail-closed behaviour, never trusting the client
-- Resource-level authorization (ownership) vs. role-level authorization
-- Keeping authorization out of controllers
+- Follow one HTTP request through the NestJS lifecycle and say, for each stage, what it is for and what it can see
+- Middleware vs. interceptor, guard vs. pipe, pipe vs. DTO validation: pick the right tool and defend it
+- `ExecutionContext`, `CallHandler`, `Observable` and the RxJS operators an interceptor needs (`tap`, `map`, `catchError`, `finalize`)
+- Custom providers (`useValue`, `useClass`, `useFactory`, `useExisting`), injection tokens, and keeping configuration out of business code
+- Parameter decorators (`createParamDecorator`) and metadata decorators read through `Reflector`
+- Writing observability code that never changes the behaviour, the response or the security of the application
 
 ## 2. Scope
 
-**In scope:** `Role` / `Permission` model, `@Roles()`, `@Permissions()`, `@CurrentUser()`, `RolesGuard`, `PermissionsGuard`, `TaskOwnerGuard`, the matrix, metadata rules, wiring, a `role` column on `users`, a migration.
+**In scope:** request id + request logging middleware, timing interceptor, `ParseResourceIdPipe`, `PaginationPipe`, the configuration provider, `@RequestMetadata()`, `@SkipRequestTiming()`, wiring them into the Task 5 application.
 
-**Out of scope (do not build them):** refresh tokens, token revocation, a permissions admin UI, multi-tenancy. The Task 1–3 routes `/projects` and `/projects/:projectId/tasks` are not changed.
+**Out of scope (do not build them):** a logging library, log files or rotation, distributed tracing, request-scoped providers (`Scope.REQUEST`), caching, rate limiting, a new database table. Do not touch the Task 1–5 logic. No new dependencies are needed.
 
-## 3. Business rules
+## 3. The application you are extending
 
-| | ADMIN | MANAGER | USER |
-|---|---|---|---|
-| Users | list, create, update, delete | list only | – (own profile via `GET /auth/me`) |
-| Tasks | list all, create, update, delete, assign | list all, create, update, assign **to USER accounts only** | see tasks assigned to them, change the **status** of their own tasks |
-| Roles / permissions | manage | **cannot** | **cannot** |
+What exists already (found by reading Task 5, so you do not duplicate it):
 
-"Own task" means the task's `assigneeId` equals the caller's id.
+| Existing | Where | What it means for Task 6 |
+|---|---|---|
+| `RbacTasksController` with `JwtAuthGuard`, `RolesGuard`, `PermissionsGuard` | `src/rbac/tasks/` | The controller you extend. Guards run **before** everything you add except middleware. |
+| `@CurrentUser()` | `src/rbac/decorators/current-user.decorator.ts` | **Reuse it.** Do not write another one. |
+| `ParsePositiveIntPipe`, `@PositiveIntParam()` | `src/common/pipes`, `src/common/decorators` | Task 4/5 already validate `:id` for the other routes. See Module C. |
+| `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`, `transform`) + `GlobalExceptionsFilter` | `src/app.setup.ts` | **Global pipe and filter.** They shape every error and they run *before* your parameter pipes. |
+| `ResponseInterceptor` | `src/common/interceptors/response.interceptor.ts` | **Not registered anywhere.** It wraps the body in an envelope. Do not register it and do not copy that behaviour: your interceptor must not change the response. |
+| `RbacModule` (controllers, services, guards) | `src/rbac/rbac.module.ts` | Imported by `AppModule`. The pipes you add are used by its controller. |
+| Task 5 HTTP tests on in-memory repositories | `src/rbac/*.spec.ts`, `test/helpers/rbac-app.ts` | The model for the Task 6 HTTP tests. They must stay green. |
 
-### Role and permission matrix
+Task ids are **positive integers** (serial primary keys), not UUIDs.
 
-| Permission | ADMIN | MANAGER | USER |
-|---|:-:|:-:|:-:|
-| `users.read` | ✅ | ✅ | ❌ |
-| `users.create` | ✅ | ❌ | ❌ |
-| `users.update` | ✅ | ❌ | ❌ |
-| `users.delete` | ✅ | ❌ | ❌ |
-| `tasks.read` | ✅ | ✅ | ❌ |
-| `tasks.create` | ✅ | ✅ | ❌ |
-| `tasks.update` | ✅ | ✅ | ❌ |
-| `tasks.delete` | ✅ | ❌ | ❌ |
-| `tasks.assign` | ✅ | ✅ | ❌ |
-| `roles.manage` | ✅ | ❌ | ❌ |
-
-USER's abilities (own tasks) are **ownership** rules, not permissions.
-
-## 4. Architecture
+What this task adds (given as scaffolding):
 
 ```text
-Request
-  │
-  ▼  JwtAuthGuard ───────────── no/invalid token, or deleted user ─► 401
-  │  (Task 4: request.user = the CURRENT user from PostgreSQL, with its role)
-  ▼
-  RolesGuard / PermissionsGuard ─ reads @Roles / @Permissions with Reflector ─► 403
-  │
-  ▼  TaskOwnerGuard (only PATCH /tasks/:id/status) ─ owner or ADMIN ─► 403 / 404
-  │
-  ▼  ValidationPipe ─► 400          (authorization runs BEFORE validation)
-  ▼  Controller ─► Service ─► Repository
+src/common/
+  tokens/request-processing.tokens.ts          injection tokens + metadata keys
+  interfaces/request-metadata.interface.ts     RequestMetadataInfo, RequestWithMetadata
+  interfaces/request-processing-config.interface.ts
+  interfaces/request-log.interface.ts          structured log entries + RequestLogger
+  providers/request-processing.config.ts       loadRequestProcessingConfig()          TODO
+  providers/request-processing.provider.ts     the config provider registration       TODO
+  providers/nest-request-logger.ts             the default log sink                   GIVEN
+  middleware/request-logging.middleware.ts                                            TODO
+  interceptors/request-timing.interceptor.ts                                          TODO
+  decorators/request-metadata.decorator.ts                                            TODO
+  decorators/skip-request-timing.decorator.ts                                         TODO
+  pipes/parse-resource-id.pipe.ts                                                     TODO
+  pipes/pagination.pipe.ts                                                            TODO
+  request-processing.module.ts                 registration, `configure()`            TODO
+src/rbac/tasks/rbac-tasks.controller.ts        new routes (see section 6)
+src/rbac/tasks/rbac-tasks.service.ts           findAll(pagination?)                   GIVEN
 ```
+
+## 4. The request lifecycle
 
 ```text
-src/rbac/
-  rbac.module.ts  rbac.constants.ts  rbac.types.ts  role-permissions.ts   ← matrix TODO
-  enums/          role.enum.ts  permission.enum.ts  task-status.enum.ts
-  decorators/     roles.decorator.ts  permissions.decorator.ts  current-user.decorator.ts   ← TODO
-  guards/         roles.guard.ts  permissions.guard.ts  task-owner.guard.ts                  ← TODO
-  users/          rbac-users.controller.ts  rbac-users.service.ts  dto/
-  tasks/          rbac-tasks.controller.ts  rbac-tasks.service.ts  dto/   (the entity is src/tasks/entities/task.entity.ts)
-  rbac-endpoints.spec.ts  task-ownership.spec.ts  (+ role-permissions / decorators / guards specs)
-test/helpers/     rbac-app.ts  rbac-http.ts  rbac-execution-context.ts  in-memory-repository.ts
+Incoming HTTP Request
+        |
+        v
+Middleware                      (Express level; no ExecutionContext, no route metadata)
+        |
+        v
+Guards                          (JwtAuthGuard -> RolesGuard -> PermissionsGuard -> TaskOwnerGuard)
+        |
+        v
+Interceptors (before)           (code before next.handle())
+        |
+        v
+Pipes                           (global ValidationPipe first, then parameter-level pipes)
+        |
+        v
+Controller handler
+        |
+        v
+Service
+        |
+        v
+Interceptors (after)            (operators on the Observable, in reverse order)
+        |
+        v
+HTTP response
 ```
 
-- Controllers contain **no** `if (user.role === …)`. Authorization lives in decorators + guards (and, for the assignment rule, where you decide it belongs).
-- Authentication is **already** applied (`@UseGuards(JwtAuthGuard)` on both controllers). Authorization is yours.
-- The role is read from the **database** by the Task 4 `JwtStrategy`; it is never read from the token, body or query string.
-- `RbacModule` is imported by `AppModule`. The Passport "jwt" strategy comes from `AuthModule`. Entities are picked up automatically (`autoLoadEntities`), so `migration:generate` sees schema changes after `pnpm build`.
+**Exception filters** are not a stage on this line: they sit "around" it. An exception thrown while the request travels through guards, interceptors, pipes, the handler or the service ends up in the exception filters (here the global `GlobalExceptionsFilter`), which turn it into the JSON error response. Figure out *exactly* which stages are covered and what that means for an interceptor that wants to measure a request that fails (Module B and the HTTP tests ask for it).
 
-## 5. Endpoints and required access
+Be able to answer these. The answers are not in this file (see `HINTS.md`, level 1, for where to look):
 
-| Method | Endpoint | Required access | Success |
+1. What is the responsibility of middleware?
+2. Why do guards execute before pipes?
+3. What is the difference between middleware and interceptors?
+4. Why can interceptors execute code before and after the handler?
+5. What does `ExecutionContext` provide?
+6. What is the purpose of `CallHandler`?
+7. Why do interceptors use Observables?
+8. What is the difference between `tap`, `map` and `finalize`?
+9. What is the difference between a pipe and a DTO validator?
+10. When should a custom provider be used?
+11. What is the difference between `useValue`, `useClass` and `useFactory`?
+12. How does `Reflector` retrieve metadata?
+13. How do custom decorators access the current request?
+14. What happens when an exception is thrown inside an interceptor or a controller?
+
+## 5. Modules
+
+All contracts below are enforced by the tests. They are written in the TODO comments of the scaffold too.
+
+### Module A – Request logging middleware
+
+`RequestLoggingMiddleware` runs for **every** request, including requests that a guard will reject and routes that do not exist.
+
+1. Generate a **new unique request id** for every request, on the server. An id sent by the client (`X-Request-Id`) is **never** reused: it would let a client forge entries in your logs.
+2. Build a `RequestMetadataInfo` – exactly `{ requestId, startedAt, clientIp, userAgent }` – and attach it to the request under `REQUEST_METADATA_PROPERTY`.
+3. Send the id in the response header named by `config.requestIdHeader`.
+4. Log (through the injected `RequestLogger`, never `console`):
+   - `request.started` immediately: `requestId`, `method`, `url`, `timestamp` (ISO-8601), `clientIp`, `userAgent`
+   - `request.completed` when the response has been sent: `requestId`, `method`, `url`, `statusCode`, `durationMs`
+5. `config.requestLoggingEnabled === false` → no entries at all, but the id, the metadata and the header still work.
+6. Call `next()` exactly once. No business logic, no database access, no knowledge of any controller.
+
+### Module B – Request timing interceptor
+
+`RequestTimingInterceptor` logs **one** `request.timing` entry per handled request: `requestId`, `method`, `url`, `statusCode`, `durationMs`, `outcome` (`"success"` | `"error"`).
+
+- Success: `statusCode` is the response's. Error: `statusCode` is the `HttpException`'s status, `500` for any other error.
+- The caller receives the handler's stream untouched: the same object on success, the **same error instance** on failure. Nothing is added, wrapped or swallowed.
+- Exactly one entry on every path; asynchronous handlers work; the handler is subscribed to once.
+- No entry when `config.timingLogsEnabled === false` or when the route is skipped (Module F). The handler still runs.
+- `requestId` comes from the request metadata set by the middleware; `UNKNOWN_REQUEST_ID` when it is missing.
+- You choose the RxJS operators. In your notes explain what each one you chose does on the success and the error path, and why `map` would be the wrong tool.
+
+Two requests measure time differently by design: the middleware's `request.completed` covers guards, pipes, filters and the write of the response; the interceptor's `request.timing` covers only the handler path. A request that a guard rejects has the first and not the second. The HTTP tests check this.
+
+### Module C – Custom pipes
+
+**`ParseResourceIdPipe`** validates a resource id parameter and returns it as a **number**: only positive integers written as plain decimal digits are accepted (see the table in the pipe's comment). Everything else, including non-string input, is a `BadRequestException` that names the parameter. It is used by `GET /tasks/:id`.
+
+`ParsePositiveIntPipe` (Task 4) does something very close. Decide how the two relate and defend the choice: reuse, extend, compose or replace. Copy-pasting its logic is not an answer.
+
+**`PaginationPipe`** turns the query `?page=2&limit=10` into `{ page: 2, limit: 10 }`:
+
+- defaults `page = 1`, `limit = 10` (never above the configured maximum)
+- plain decimal digit strings only; `0`, negatives, decimals, exponents, empty strings, words, repeated parameters (`?page=1&page=2`) and values beyond `Number.MAX_SAFE_INTEGER` are `400`
+- a `limit` above `config.maxPageSize` is **rejected** (`400`), not silently reduced; `limit === maxPageSize` is fine
+- the maximum comes from the injected configuration, never from a constant
+- the result has exactly `page` and `limit`
+
+Be ready to explain when a custom pipe is the right tool and when `ValidationPipe` with a DTO is. (Hint: look at what already validates `POST /tasks`.)
+
+### Module D – Custom provider and dependency injection
+
+`RequestProcessingConfig` is built from the environment, validated once at startup, and injected through `REQUEST_PROCESSING_CONFIG`:
+
+| Variable | Field | Default | Rules |
 |---|---|---|---|
-| GET | `/users` | ADMIN, MANAGER | 200 list (no credential fields) |
-| POST | `/users` | ADMIN | 201 |
-| PATCH | `/users/:id` | ADMIN | 200 |
-| DELETE | `/users/:id` | ADMIN | 204 |
-| GET | `/tasks` | ADMIN, MANAGER | 200 |
-| POST | `/tasks` | ADMIN, MANAGER | 201 (body: `title`, optional `description`, required `projectId`; unknown project → 404) |
-| GET | `/tasks/my` | any authenticated user | 200 (tasks assigned to the caller) |
-| PATCH | `/tasks/:id` | ADMIN, MANAGER | 200 |
-| PATCH | `/tasks/:id/status` | the task's owner (assignee) **or** ADMIN | 200 |
-| DELETE | `/tasks/:id` | ADMIN | 204 |
-| PATCH | `/tasks/:id/assign` | ADMIN, MANAGER (see "Assignment rules") | 200 |
+| `REQUEST_LOGGING_ENABLED` | `requestLoggingEnabled` | `true` | `true`, `false`, `1`, `0`, any letter case |
+| `REQUEST_TIMING_ENABLED` | `timingLogsEnabled` | `true` | same |
+| `MAX_PAGE_SIZE` | `maxPageSize` | `100` | positive integer in plain decimal digits |
+| `REQUEST_ID_HEADER` | `requestIdHeader` | `x-request-id` | letters, digits, `-`; stored in lower case |
+| `NODE_ENV` | `environment` | `development` | any value |
 
-Error semantics (same envelope as Task 2–4):
+- `loadRequestProcessingConfig(env)` is a pure function of the `env` object it gets. It never reads `process.env` itself and never modifies its argument.
+- A variable that is **unset** gets its default. A variable that is **set but invalid** (including the empty string) makes it throw an `Error` whose message names the variable. The application must not start with a broken configuration.
+- The returned object is frozen.
+- `requestProcessingConfigProvider` must use **at least one** of `useValue`, `useClass`, `useFactory`, `useExisting`, call `loadRequestProcessingConfig(process.env)` **when the module is created** (not when the file is imported), and be injectable into the middleware, the interceptor and the pipe. Explain in your notes why that pattern fits.
+- Middleware, interceptor and pipe contain no hard-coded configuration and no circular dependency.
 
-| Situation | Status |
-|---|---|
-| no token, malformed/expired/forged token, account deleted | **401** |
-| authenticated, but the role/permission/ownership does not allow it | **403** |
-| unknown id (task/user), when the caller is allowed to ask | **404** |
-| invalid body or id format | **400** |
+### Module E – `ExecutionContext` and `@RequestMetadata()`
 
-## 6. Rules you must implement and defend
+`@RequestMetadata()` returns the metadata the middleware recorded; `@RequestMetadata('requestId')` returns one field. It reads only that, through `ExecutionContext`. It returns `undefined` (no exception) when the middleware did not run. It exposes nothing else: no headers, no user, no body. For the authenticated user use the existing `@CurrentUser()`.
 
-### Metadata rules
+### Module F – Metadata-driven behaviour: `@SkipRequestTiming()`
 
-| | Rule |
-|---|---|
-| `@Roles(a, b)` | caller needs **any** of the listed roles |
-| `@Permissions(a, b)` | caller needs **all** of the listed permissions |
-| Roles: handler vs controller | the **handler-level** list **replaces** the controller-level list |
-| Permissions: handler vs controller | the two lists are **combined**; the caller needs everything in both |
-| No metadata at all | the guard lets an authenticated caller through (authentication is still required) |
-| `@Roles()` with no arguments | nobody passes (an empty requirement can never be met) |
-| Caller has no principal, or `role` is not a real `Role` (`'superadmin'`, `'ADMIN'`, `[…]`, missing) | denied |
-| A guard says no | it returns `false` (Nest answers **403**) |
+- `@SkipRequestTiming()` works on a method and on a controller; it only records metadata under `SKIP_REQUEST_TIMING_KEY`, with the boolean it is given (default `true`).
+- `@SkipRequestTiming(false)` on a method turns timing back **on** in a controller that skips it.
+- Precedence: method over controller; no metadata at all means the route **is** timed.
+- The interceptor reads the metadata with `Reflector`.
 
-ADMIN has no hidden bypass in `RolesGuard`: a route lists the roles that may use it. ADMIN's power over permissions comes from the matrix.
+## 6. API
 
-### Ownership rules (`PATCH /tasks/:id/status`)
+Authentication and authorization are the Task 5 ones. The new routes are in `RbacTasksController` and are declared **before** the `:id` routes, so `:id` never captures them.
 
-- The owner is the user in `assigneeId`. A task assigned to nobody belongs to nobody (only ADMIN can change its status).
-- ADMIN may change any task's status. MANAGER has no special right here: a manager changes the status only of a task assigned to themselves.
-- A missing task is **404 for every caller**. (Think about what a different answer for USER would reveal.)
-- Ownership is checked **before** the body is validated: a non-owner sending a bad body gets 403, an owner sending a bad body gets 400.
-- A malformed id (`abc`, `1.5`, `0`, `1 OR 1=1`) must never produce a 5xx or a success.
+| Method | Endpoint | Access | Demonstrates |
+|---|---|---|---|
+| GET | `/tasks?page=&limit=` | ADMIN, MANAGER | `PaginationPipe`. The body is still a plain array. **You wire the pipe** (TODO in the controller). |
+| GET | `/tasks/:id` | ADMIN, MANAGER (`tasks.read`) | `ParseResourceIdPipe` (given wiring) |
+| GET | `/tasks/request-info` | any authenticated user | `@RequestMetadata()` → returns the four metadata fields |
+| GET | `/tasks/processing-info` | any authenticated user | request id + `@CurrentUser()` + an async handler (waits ~50 ms): `{ requestId, userId }` |
+| GET | `/tasks/skip-timing` | any authenticated user | `@SkipRequestTiming()` (given wiring) |
 
-### Assignment rules (`PATCH /tasks/:id/assign`)
+Errors keep the existing envelope `{ statusCode, error, message, errors? }` (the global filter). Authorization still wins over validation: a USER who sends a bad id gets `403`, an anonymous caller `401`.
 
-- ADMIN may assign a task to any existing user.
-- MANAGER may assign only to accounts **whose current role is USER** (403 otherwise; the check uses the role stored now, not an old one).
-- An unknown task or an unknown assignee is 404.
+## 7. Sensitive data
 
-## 7. Implementation checklist (recommended order)
+No log entry may contain: an `Authorization` header or any token, cookies, passwords, request bodies, or the **values** of sensitive query parameters (a request like `GET /tasks/my?access_token=...&password=...` must not leak them through `url`). Decide what counts as sensitive and implement it once, in one place. The entries are typed so that headers and bodies cannot even be put in them – keep it that way.
 
-1. **Data:** add a `role` column to `User` (`Role`, `NOT NULL`, default `user`), remove the `UserWithRole` alias in `rbac.types.ts`, generate and **review** a migration (the `tasks` migration is already given). Make sure a user created through Task 4 registration still works.
-2. **Matrix:** fill `ROLE_PERMISSIONS`.
-3. **Decorators:** `@Roles()`, `@Permissions()`, `@CurrentUser()`.
-4. **`RolesGuard`**, then **`PermissionsGuard`** (unit tests first).
-5. **Apply** them to the two controllers; keep authentication first.
-6. **`TaskOwnerGuard`** for the status route.
-7. **Assignment rule** in `RbacTasksService.assign` (or elsewhere, defend it).
-8. **Review** with the "401 or 403?" question for every row of the endpoint table.
+## 8. Implementation checklist (recommended order)
 
-## 8. Tests
+1. Read the tests of Module D. Implement `loadRequestProcessingConfig()`, then register the provider. `pnpm test:request` → provider specs green.
+2. Pipes: `ParseResourceIdPipe`, then `PaginationPipe`.
+3. `RequestMetadata` decorator and `SkipRequestTiming` decorator (metadata only).
+4. `RequestLoggingMiddleware`. Register it in `RequestProcessingModule.configure()` for all routes.
+5. `RequestTimingInterceptor`. Register it (global or per controller – decide and defend).
+6. Wire the rest: `PaginationPipe` on `GET /tasks`, import `RequestProcessingModule` in `RbacModule` (the pipe needs the config token) and in `AppModule`.
+7. Run everything (`pnpm test`), then the database e2e (`pnpm test:e2e`, see "Known issues").
+8. Write your notes (section 11).
+
+## 9. Tests
 
 ```bash
-nvm use                       # Node 24
-pnpm test:rbac                # the Task 5 suite (no database needed)
-pnpm test                     # all unit suites (Task 1–4 green; Task 5 red until you finish)
-pnpm test:e2e                 # needs `pnpm db:test:up`; Task 3/4 e2e must stay green
+pnpm test:request     # only the Task 6 specs (src/common)
+pnpm test             # everything, no database needed
+pnpm test:e2e         # builds, then runs the database suites (see "Known issues")
 ```
 
-| Test file | What it checks |
+| File | What it checks |
 |---|---|
-| `src/rbac/role-permissions.spec.ts` | the matrix |
-| `src/rbac/decorators/decorators.spec.ts` | metadata keys, class vs method, empty `@Roles()`, `@CurrentUser()` |
-| `src/rbac/guards/roles.guard.spec.ts` | any-of, controller vs route override, missing metadata, bad principals |
-| `src/rbac/guards/permissions.guard.spec.ts` | all-of, merge of controller + route, missing metadata, bad principals |
-| `src/rbac/rbac-endpoints.spec.ts` | every endpoint × role (401/403/2xx), no escalation through token claims, role changes take effect immediately |
-| `src/rbac/task-ownership.spec.ts` | owner/ADMIN rules, 404 vs 403, validation order, assignment rules |
+| `src/common/providers/request-processing.provider.spec.ts` | the config function and the provider (defaults, invalid values, DI, overrides) |
+| `src/common/middleware/request-logging.middleware.spec.ts` | the class alone, and the registered middleware over HTTP (ids, header, logs, sensitive data, disabled logging) |
+| `src/common/interceptors/request-timing.interceptor.spec.ts` | success, failure, exactly-once, response untouched, config flag, `@SkipRequestTiming()` precedence – with a **faked clock** |
+| `src/common/pipes/*.spec.ts` | both pipes, including the configured maximum |
+| `src/common/decorators/*.spec.ts` | the parameter decorator and the metadata decorator |
+| `src/common/request-processing.http.spec.ts` | the whole lifecycle over HTTP: metadata, timing, guard-before-pipe order, pagination, Task 5 RBAC intact, no secrets in logs |
+| `test/request-processing.e2e-spec.ts` | a smoke test against the real `AppModule` and PostgreSQL |
 
-They run the **real** `JwtStrategy`, guards and controllers on in-memory repositories; only storage is faked. Some tests (for example "no token → 401") already pass on the starter because Task 4 authentication exists: green is not the goal, understanding why each test is red is. Do not edit the provided tests.
+Rules:
 
-## 9. Definition of Done
+- **Do not edit the provided tests** to make them pass. If you believe a test is wrong, explain why in your notes; do not change it.
+- Test helpers changed for Task 6 (backward compatible): `test/helpers/rbac-app.ts` (`createFixture({ requestConfig })`, `logs`, imports `RequestProcessingModule`), `test/helpers/in-memory-repository.ts` (`skip`/`take`). New helpers: `http-execution-context.ts`, `param-decorator.ts`.
+- You may **add** tests (for example for your URL sanitizing). Tests must not depend on exact milliseconds or on the text of a log line; use the fake clock.
+- The scaffold is deliberately red: expect failures until you implement the TODOs.
 
-- `pnpm test` and `pnpm test:e2e` are green; `pnpm build` and `npx tsc --noEmit` show no new errors.
-- Every row of the endpoint table holds, and you can say for each failure whether it is 401, 403 or 404 and why.
-- No role is read from the token, body, query string or headers.
-- Controllers contain no role checks; guards contain no database access except `TaskOwnerGuard`'s task lookup.
-- The migration was read, and the `role` column does not break Task 4 registration/login.
-- You can explain the metadata rules (why roles *replace* and permissions *merge*) and the "no metadata" policy, including its risk.
+## 10. Definition of Done
 
-## 10. Advanced challenges (optional)
+- [ ] `pnpm test` is green, including every Task 5 test, with the provided tests untouched
+- [ ] `pnpm build` and `pnpm lint` are clean
+- [ ] `RequestProcessingModule` is imported by `AppModule`; the application starts with no `.env` entries for Task 6 (defaults) and refuses to start with `MAX_PAGE_SIZE=abc`
+- [ ] A request to any route, even a `401` or a `404`, has the request id header
+- [ ] No secret in any log entry (try it with a real login request)
+- [ ] The middleware and the interceptor contain no `console`, no database access, no `if (user.role …)`, and no hard-coded configuration
+- [ ] `ResponseInterceptor` is still unregistered and the response bodies are unchanged
+- [ ] Your notes answer the 14 lifecycle questions in your own words and justify the design decisions below
 
-1. Authorize with **permissions** instead of roles on every route.
-2. Support **multiple roles per user** (many-to-many); decide what "any of" and the matrix mean now.
-3. Model **role → permission** in the database with TypeORM relations.
-4. Load **dynamic permissions** from the database (and think about caching and invalidation).
-5. A reusable **`@Public()`** decorator.
-6. A **global** authorization guard (`APP_GUARD`); decide the default for routes without metadata (secure by default).
-7. Resolve **metadata inheritance and override** for a custom base controller.
-8. Write your own **unit tests for guards** and **integration tests** against PostgreSQL.
-9. Stop an ADMIN from demoting or deleting the **last remaining admin** (or themselves).
-10. Replace the in-memory test fixture with PostgreSQL-backed e2e tests for the Task 5 endpoints (`test/*.e2e-spec.ts`).
+## 11. Notes you must write
 
-## 11. Security failures that cap the score at 59
+Create `NOTES.md` (any length, plain language) with:
 
-- a role, permission or user id taken from the token claims, body, query string or headers
-- a route that should be protected but answers 2xx to an anonymous or under-privileged caller
-- authorization written as `if (user.role …)` inside controllers or services instead of metadata + guards
-- a guard that fails **open** (returns `true` on an error, a missing user or an unknown role)
-- a response that contains `passwordHash`
-- a MANAGER able to create/promote an ADMIN, or a USER able to promote themselves
-- editing the provided tests to make them pass
+1. The 14 questions of section 4.
+2. Which provider pattern you used and why; why a token and not a class.
+3. Global or controller-level interceptor registration, and what changes.
+4. The relation between `ParseResourceIdPipe` and `ParsePositiveIntPipe`.
+5. Which RxJS operators your interceptor uses, and what happens to each on success, error and cancellation.
+6. What you decided is "sensitive" in a URL, and where.
+7. One thing in this assignment you found surprising.
+
+## 12. Advanced challenges (optional)
+
+- Make the request id available to the **services** without passing it through every call (`AsyncLocalStorage`) and explain why `Scope.REQUEST` is a poor fit.
+- Use `useExisting` to expose the config under a second token, and explain when an alias is useful.
+- Add a `Server-Timing` response header from the interceptor – and explain why that violates "do not touch the response" unless you take care.
+- Add `Link`/`X-Total-Count` pagination headers without changing the array body.
+- Handle client disconnects: what does the interceptor see when the client aborts?
+
+## 13. Failures that cap the score at 59
+
+- A secret (token, cookie, password, sensitive query value) in a log entry
+- A request id taken from the client
+- A change that weakens Task 5 authorization (a guard removed or reordered, a route open to anonymous callers)
+- The interceptor changing the response body, status or error
+- Business logic or database access in the middleware or the interceptor
+- The provided tests edited to make them pass, or assertions weakened
+
+## 14. Known issues of the repository (not part of your task)
+
+- `pnpm test:e2e` currently fails to start in every database suite with `Data type "undefined" in "User.role" is not supported by "postgres" database` – the `role` column of the Task 5 `User` entity has no explicit `type`, and the test runner does not emit the metadata TypeORM would infer it from. This predates Task 6. Fixing it is allowed (and small: give the column an explicit `type`/`enum`); do it in a separate commit and say so in your notes. Until it is fixed, `test/request-processing.e2e-spec.ts` cannot run; the HTTP spec covers the same ground without a database.
+- `tsc -p tsconfig.json` reports a few type errors in older spec files (`auth.service.spec.ts`, `projects.controller.spec.ts`, `tasks.controller.spec.ts`). `pnpm build` (which excludes specs) is clean.

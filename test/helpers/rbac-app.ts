@@ -21,6 +21,27 @@ import { Role } from '../../src/rbac/enums/role.enum.js';
 import { TaskStatus } from '../../src/tasks/enums/task-status.enum.js';
 import { RbacModule } from '../../src/rbac/rbac.module.js';
 import { InMemoryRepository } from './in-memory-repository.js';
+import type { RequestLogEntry } from '../../src/common/interfaces/request-log.interface.js';
+import type { RequestProcessingConfig } from '../../src/common/interfaces/request-processing-config.interface.js';
+import { RequestProcessingModule } from '../../src/common/request-processing.module.js';
+import {
+  REQUEST_LOGGER,
+  REQUEST_PROCESSING_CONFIG,
+} from '../../src/common/tokens/request-processing.tokens.js';
+
+/** The config every fixture uses unless a test overrides parts of it. */
+export const TEST_REQUEST_CONFIG: RequestProcessingConfig = {
+  requestLoggingEnabled: true,
+  timingLogsEnabled: true,
+  maxPageSize: 50,
+  requestIdHeader: 'x-request-id',
+  environment: 'test',
+};
+
+export interface FixtureOptions {
+  /** Overrides parts of `TEST_REQUEST_CONFIG` (Task 6). */
+  requestConfig?: Partial<RequestProcessingConfig>;
+}
 
 /** Ids of the seeded accounts. */
 export const ids = { admin: 1, manager: 2, user: 3, otherUser: 4 } as const;
@@ -41,6 +62,8 @@ export interface Fixture {
   /** `Authorization` header tuple for supertest's `.set(...)`. */
   as(id: number): [string, string];
   http(): ReturnType<typeof request>;
+  /** Every entry the request processing system logged (Task 6). */
+  logs: RequestLogEntry[];
 }
 
 /**
@@ -52,7 +75,10 @@ export interface Fixture {
  * Seeded accounts: admin (1), manager (2), user (3), otherUser (4) - all with a
  * stored password hash, so a response that leaks it is caught.
  */
-export async function createFixture(): Promise<Fixture> {
+export async function createFixture(
+  options: FixtureOptions = {},
+): Promise<Fixture> {
+  const logs: RequestLogEntry[] = [];
   const users = new InMemoryRepository(['email']);
   const tasks = new InMemoryRepository();
   const projects = new InMemoryRepository(['name']);
@@ -67,7 +93,7 @@ export async function createFixture(): Promise<Fixture> {
     users.seed({ id, email, role, passwordHash: PASSWORD_HASH });
 
   const moduleRef = await Test.createTestingModule({
-    imports: [PassportModule, RbacModule],
+    imports: [PassportModule, RbacModule, RequestProcessingModule],
     providers: [
       JwtStrategy,
       UsersService,
@@ -91,6 +117,11 @@ export async function createFixture(): Promise<Fixture> {
     .useValue(tasks)
     .overrideProvider(getRepositoryToken(Project))
     .useValue(projects)
+    // Task 6: isolated configuration and an in-memory log sink.
+    .overrideProvider(REQUEST_PROCESSING_CONFIG)
+    .useValue({ ...TEST_REQUEST_CONFIG, ...options.requestConfig })
+    .overrideProvider(REQUEST_LOGGER)
+    .useValue({ log: (entry: RequestLogEntry) => logs.push(entry) })
     .compile();
 
   const app = moduleRef.createNestApplication<INestApplication<App>>({
@@ -122,5 +153,6 @@ export async function createFixture(): Promise<Fixture> {
     tokenFor,
     as: (id) => ['Authorization', `Bearer ${tokenFor(id)}`],
     http: () => request(app.getHttpServer()),
+    logs,
   };
 }

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import type { Pagination } from '../../common/pipes/pagination.pipe.js';
 import { ProjectsService } from '../../projects/projects.service.js';
 import { Task } from '../../tasks/entities/task.entity.js';
 import { TaskStatus } from '../../tasks/enums/task-status.enum.js';
@@ -30,8 +31,14 @@ export class RbacTasksService {
     private readonly projectsService: ProjectsService,
   ) {}
 
-  findAll(): Promise<Task[]> {
-    return this.tasks.find();
+  /** All tasks, or one page of them when `pagination` is given. */
+  findAll(pagination?: Pagination): Promise<Task[]> {
+    if (!pagination) return this.tasks.find();
+    return this.tasks.find({
+      order: { id: 'ASC' },
+      skip: (pagination.page - 1) * pagination.limit,
+      take: pagination.limit,
+    });
   }
 
   findAssignedTo(userId: number): Promise<Task[]> {

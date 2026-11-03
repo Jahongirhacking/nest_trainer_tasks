@@ -4,12 +4,17 @@ import {
   Delete,
   Get,
   HttpCode,
+  Param,
   Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
 import { PositiveIntParam } from '../../common/decorators/positive-int-param.decorator.js';
+import { RequestMetadata } from '../../common/decorators/request-metadata.decorator.js';
+import { SkipRequestTiming } from '../../common/decorators/skip-request-timing.decorator.js';
+import type { RequestMetadataInfo } from '../../common/interfaces/request-metadata.interface.js';
+import { ParseResourceIdPipe } from '../../common/pipes/parse-resource-id.pipe.js';
 import type { Task } from '../../tasks/entities/task.entity.js';
 import { CurrentUser } from '../decorators/current-user.decorator.js';
 import { Permissions } from '../decorators/permissions.decorator.js';
@@ -50,6 +55,10 @@ import { RbacTasksService } from './rbac-tasks.service.js';
 export class RbacTasksController {
   constructor(private readonly tasksService: RbacTasksService) {}
 
+  // TASK 6 TODO: paginate with `@Query(PaginationPipe)` (?page=2&limit=10).
+  //   `tasksService.findAll()` already accepts a `Pagination`. The body stays a
+  //   plain array. Import RequestProcessingModule where the pipe's config
+  //   dependency can be resolved (see request-processing.module.ts).
   @Roles(Role.ADMIN, Role.MANAGER)
   @Permissions(Permission.TASKS_READ)
   @Get()
@@ -70,6 +79,43 @@ export class RbacTasksController {
   @Get('my')
   findMine(@CurrentUser() actor: AuthenticatedUser): Promise<Task[]> {
     return this.tasksService.findAssignedTo(actor.id);
+  }
+
+  // TASK 6 - request processing demo routes. Any authenticated user may call
+  // them. They are declared BEFORE `:id` routes so `:id` never captures them.
+
+  /** Echoes the request metadata the middleware recorded. */
+  @Get('request-info')
+  requestInfo(
+    @RequestMetadata() metadata: RequestMetadataInfo | undefined,
+  ): RequestMetadataInfo | null {
+    return metadata ?? null;
+  }
+
+  /** A slow-ish async handler: lets the timing interceptor measure something. */
+  @Get('processing-info')
+  async processingInfo(
+    @RequestMetadata() metadata: RequestMetadataInfo | undefined,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<{ requestId: string | null; userId: number }> {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return { requestId: metadata?.requestId ?? null, userId: actor.id };
+  }
+
+  /** Never timed. */
+  @SkipRequestTiming()
+  @Get('skip-timing')
+  skipTiming(): { timed: false } {
+    return { timed: false };
+  }
+
+  @Roles(Role.ADMIN, Role.MANAGER)
+  @Permissions(Permission.TASKS_READ)
+  @Get(':id')
+  findOne(@Param('id', ParseResourceIdPipe) id: string): Promise<Task> {
+    // `id` is typed `string` on purpose: see HINTS.md ("Pipes and the global
+    // ValidationPipe"). The pipe returns a number at runtime.
+    return this.tasksService.findOne(Number(id));
   }
 
   @Roles(Role.ADMIN, Role.MANAGER)

@@ -57,6 +57,12 @@ export class InMemoryRepository {
     this.rows
       .filter((r) => this.matches(r, options?.where))
       .sort((a, b) => a.id - b.id)
+      .slice(
+        options?.skip ?? 0,
+        options?.take === undefined
+          ? undefined
+          : (options?.skip ?? 0) + options.take,
+      )
       .map((r) => ({ ...r })),
   );
 

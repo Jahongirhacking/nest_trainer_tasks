@@ -1,53 +1,104 @@
-# Hints – Assignment 5 (read level by level)
+# Hints – Assignment 6 (Request Processing System)
 
-No level contains a finished decorator, guard or permission check.
+Open one level at a time. Try for at least 30 minutes before the next one. There is no complete solution here on purpose.
 
-## Level 1 – Concepts
+---
 
-- **Authentication vs. authorization**: 401 = "I do not know who you are"; 403 = "I know who you are, and the answer is no". Task 4 produced the first; this task produces the second. Both are *guards*, but they are different guards with different answers.
-- **A decorator that "does something" often does nothing**: `@Roles()` does not check anything. It only attaches a note (metadata) to a class or a method. Another piece (the guard) reads the note later. Separating *declaring* from *enforcing* is the whole design.
-- **Reflector**: Nest's tool for reading that metadata back. It can look at one place, at several places, and it has helpers for the two questions "which place wins?" and "should the places be combined?". Read its documentation: the difference between the helpers is exactly this task's *route vs controller* question.
-- **ExecutionContext**: gives the guard the *handler* (the method) and the *class* (the controller) that are about to run, and the request. That is how a guard knows what metadata to read.
-- **Roles vs. permissions**: a role is a label for a kind of person; a permission is one thing that may be done. Routes that list permissions survive new roles; routes that list roles are shorter to read. The matrix connects them.
-- **Role-level vs. resource-level**: "managers may update tasks" is about the role. "you may change *this* task's status because it is yours" depends on the specific row, so a role alone cannot answer it.
-- **Never trust the client for identity**: a token is only proof of *who*, signed long ago. What that user may do **now** is in the database.
-- **Fail closed**: when in doubt (no user, unknown role, unexpected error) the answer is *no*.
+## Level 1 – Conceptual: which tool, and why
 
-## Level 2 – Structure
+**Module A – middleware.**
+- Middleware is the first thing that touches a request, before NestJS knows which controller, guard or handler will serve it. It sees `req`/`res` – the same objects Express gives any middleware – and nothing about the route's metadata.
+- Ask yourself: what work *must* happen for every request, even one that a guard rejects or that matches no route? A request id is the classic example. Why can an interceptor not do that job?
+- The listeners you attach to `res` are how you learn what happens *later*. Which `res` events does Node emit when a response is complete? Which one also fires when the client goes away?
 
-- **Metadata keys** are in `rbac.constants.ts` so the decorator and the guard cannot disagree on the name.
-- **Decorators**: look at what Nest ships for attaching metadata, and at how a parameter decorator receives `(data, context)`. The existing Task 4 `CurrentUser` is the model for the param decorator, but this one is typed with `role`.
-- **Guard order**: guards listed in `@UseGuards(A, B)` run left to right; if `A` throws or says no, `B` never runs. Put authentication first. Guards run **before** pipes, which is why a forbidden caller never reaches body validation.
-- **Where to read the principal**: `request.user`, set by the Task 4 `JwtStrategy`. Check it for existence and for a *real* `Role` before using it.
-- **Returning `false`** from a guard makes Nest raise 403 for you. Throwing your own exception is also possible, but then the tests that expect `false` will tell you which contract the guard has here.
-- **Matrix → permissions**: the guard maps the caller's role to a list of permissions, then asks whether the required ones are all inside. Look at the array methods that answer "does every / does some".
-- **Ownership**: the id of the task is in the route parameters. The guard runs before the `PositiveIntParam` pipe, so validating the raw string is *your* job. Decide how a bad id is answered.
-- **Assignment rule**: it needs two roles (the caller's and the assignee's). The service already loads the assignee; the caller is passed in. Decide the status code for a violation and be able to defend it.
-- **Module wiring**: guards used with `@UseGuards(SomeGuard)` are instantiated by Nest in the context of the module that owns the controller, so their dependencies (`Reflector`, `RbacTasksService`) must be resolvable there.
-- **The `role` column**: add it to the `User` entity, then follow `src/migrations/README.md`. Existing rows need a default; ask yourself what role Task 4's registration should give new accounts.
+**Module B – interceptor.**
+- An interceptor wraps the handler. Everything before `next.handle()` runs "before", and whatever you do to the returned stream runs "after". Read what `CallHandler` is for: the handler does not run until something subscribes.
+- Why does Nest use an `Observable` here and not a Promise? What can a stream do that a Promise cannot (think: several values, cancellation, composing steps)?
+- Lay out three questions for every RxJS operator you consider: *does it change the value? does it run on errors? does it run on unsubscribe?* Then compare `tap`, `map`, `catchError` and `finalize` with those questions. One of them must not be used for logging.
 
-## Level 3 – Debugging
+**Module C – pipes.**
+- A pipe transforms or validates **one argument** right before the handler. A DTO plus `ValidationPipe` describes the shape of a whole object with decorators. When is a few lines of code better than a class with five decorators? When is it worse?
+- Where does the global `ValidationPipe` sit relative to a pipe you attach to a single parameter? Read `src/app.setup.ts`, then read the comment at the top of `src/common/decorators/positive-int-param.decorator.ts`. That comment describes a trap you will meet.
 
-| Symptom | Likely cause |
-|---|---|
-| Every protected test returns 403, even for ADMIN | the guard still returns `false` (starter), or the matrix is empty |
-| The guard "ignores" `@Roles` | the decorator writes under a different key than the guard reads, or the decorator is still the no-op starter |
-| Controller-level `@Roles` is ignored when a route also has one | you read only the handler, or you combine instead of replace |
-| Controller-level `@Permissions` seems ignored | you read only the handler |
-| `undefined` in `@CurrentUser()` | the authentication guard did not run first, or the factory reads the wrong request field |
-| ADMIN is denied by `RolesGuard` on `/users/:id` | the route's `@Roles` does not list ADMIN; there is no automatic bypass |
-| 500 on `PATCH /tasks/abc/status` | the ownership guard converts the id without validating it |
-| Manager can assign a task to an admin | the assignment rule was not implemented, or it looks at an old role |
-| 404 instead of 403 for a forbidden caller on a missing id | the lookup happens before the role check (guards must run first) |
-| `Nest can't resolve dependencies of the TaskOwnerGuard` | `RbacTasksService` is not provided/exported where the controller lives |
-| After adding the `role` column Task 4 e2e tests fail | no default for existing rows, or registration does not set a role |
+**Module D – custom providers.**
+- You need an object that is *computed* (from the environment), *validated*, *shared*, and *replaceable in tests*. Which of the four provider recipes gives you each of those? Which one would you pick if the value were a constant? If it needed other providers injected?
+- Why an injection **token** and not a class? What would `@Inject(...)` look like for something that is not a class?
 
-Debugging tools: `pnpm test:rbac -t "roles.guard"` runs one file's tests; `console.log(Reflect.getMetadataKeys(Controller.prototype.method))` shows what a decorator wrote.
+**Module E – decorators.**
+- A parameter decorator is a function that Nest calls with "the execution context" when it prepares the handler's arguments. What is in an `ExecutionContext` besides the request? Why does Nest not hand you `req` directly? (Think: HTTP, WebSockets, gRPC.)
 
-## Level 4 – Design questions to answer in your own words
+**Module F – metadata.**
+- A metadata decorator writes a key/value pair on a class or a method; `Reflector` reads it back. Which of the two places (handler, class) should win if both have a value? Check which `Reflector` helper encodes exactly that rule.
 
-1. Why do roles *replace* but permissions *merge* between handler and controller in this assignment? What bug does each choice prevent or create?
-2. What is the risk of "no metadata → allowed"? When would you flip the default, and what would break?
-3. Why is the role loaded from the database on every request instead of stored in the token? What does it cost?
-4. Why is a missing task 404 for everyone, and would you ever answer 403 instead?
-5. Guard or service policy for ownership: which did you choose, and what test would convince a reviewer?
+**Lifecycle questions (section 4).** The official documentation has a page called "Request lifecycle". Read it once, then close it and draw the diagram from memory *including* where exception filters catch things.
+
+---
+
+## Level 2 – Technical: the APIs
+
+- Middleware: `NestMiddleware` (`use(req, res, next)`), `NestModule#configure(consumer: MiddlewareConsumer)`, `consumer.apply(...).forRoutes(...)`. The middleware class can have constructor injection; it must be registered through a module for that to work. Node: `res.on('finish', …)`, `res.setHeader(…)`, `crypto.randomUUID()`, `performance.now()` / `process.hrtime.bigint()` / `Date.now()`.
+- Express: `req.originalUrl` keeps the full url (`req.url` is relative to the mount point); `req.ip`, `req.headers['user-agent']`.
+- Interceptor: `NestInterceptor#intercept(context, next)`, `context.switchToHttp().getRequest()/getResponse()`, `context.getHandler()`, `context.getClass()`, `next.handle()`. RxJS: `tap({ next, error, complete })` (the object form), `catchError`, `throwError`, `finalize`. Registration: a provider with the `APP_INTERCEPTOR` token (global, but still created by DI inside its module) or `@UseInterceptors()` on a controller.
+- `HttpException#getStatus()`; `instanceof HttpException`.
+- Pipes: `PipeTransform#transform(value, metadata: ArgumentMetadata)`; `BadRequestException`. Attach with `@Param('id', ParseResourceIdPipe)` or `@Query(PaginationPipe)`. A pipe passed as a **class** is instantiated by Nest in the context of the module that owns the controller – so its constructor dependencies must be visible *there*.
+- Providers: `{ provide: TOKEN, useValue | useClass | useFactory | useExisting }`, `@Inject(TOKEN)`, `inject: [...]` for factories, `exports` / `imports` for crossing module boundaries. `Test.createTestingModule(...).overrideProvider(TOKEN).useValue(...)` is how the tests swap your provider.
+- Decorators: `createParamDecorator((data, ctx: ExecutionContext) => …)`; `SetMetadata(key, value)`; `Reflector#get`, `#getAll`, `#getAllAndOverride`, `#getAllAndMerge`.
+- Testing: `vi.useFakeTimers()` fakes `Date`, `performance` **and** `process.hrtime`; `vi.advanceTimersByTimeAsync(ms)` moves them. `lastValueFrom(observable)` turns a stream into a Promise.
+
+---
+
+## Level 3 – Implementation direction
+
+**Suggested order:** config function → provider → pipes → decorators → middleware → module wiring → interceptor → controller wiring. Run `pnpm test:request` after each step and read *which* tests turned green.
+
+**Edge cases and common mistakes**
+
+*Config*
+- `Number('')` is `0`, `Number(' ')` is `0`, `Number('1e3')` is `1000`, `Number('0x10')` is `16`. A regular expression on the *string* first, then a number.
+- `process.env` read at the top of a file runs at import time, not when the module is created. The provider spec changes the environment between two module creations.
+- Freeze the object; make sure the test that passes `{}` really gets defaults and not the values of your shell.
+
+*Pipes*
+- Query values arrive as `string | string[] | object` (`?page=1&page=2`, `?page[a]=1`). A function that only handles strings is a bug.
+- The id pipe returns a number, but the global `ValidationPipe` (`transform: true`) converts a parameter whose TypeScript type is `number` *before* your pipe sees it – and `Number('1e3')` is `1000`. Look at how `PositiveIntParam` avoids that, and at the type of `id` in the given `GET /tasks/:id` handler.
+- Decide the default `limit` when `maxPageSize` is smaller than 10.
+
+*Middleware*
+- `res.statusCode` is only meaningful when the response is finished. Which event do you wait for?
+- Registering with `forRoutes('*')` should include routes that do not exist; verify with the 404 test instead of assuming. If your Nest version warns about the wildcard, read the warning.
+- Where does the sanitizing of the url live? You need it in more than one place (middleware, interceptor) – a single small function is better than two copies.
+- If `config.requestLoggingEnabled` is `false`, do not even build the entries.
+
+*Interceptor*
+- On the *error* path `tap`'s `next` callback never runs; on the *success* path `error` never runs. Which callback of the object form covers "the stream ended"? Which would log twice if you combined it with `finalize`?
+- `delay()` shifts values but **not** errors. (The given tests know that.)
+- The status code on the success path: look at when Nest writes the status of the response relative to your `tap`. Check what you see for `GET` and think about `POST`.
+- For errors, the interceptor sees the exception *before* the filter turns it into a response. How do you get a status code out of it?
+- Exactly one entry. If you use more than one operator, which one owns the logging?
+- Do not `catchError` and return something else; if you catch, you must rethrow the same error.
+- `reflector.getAllAndOverride` takes `[handler, class]` in a specific order. Test it with the three combinations in the spec.
+
+*Provider wiring*
+- A global interceptor registered with `APP_INTERCEPTOR` *inside* `RequestProcessingModule` still applies to the whole app. It also needs `Reflector`, the config and the logger resolvable in that module – they are.
+- `RbacModule` must be able to resolve `REQUEST_PROCESSING_CONFIG` for `PaginationPipe`. Import the module that **exports** it.
+
+**Testing strategies**
+- Run a single file: `pnpm vitest run src/common/pipes/pagination.pipe.spec.ts`.
+- When an HTTP test fails, print `f.logs` – it is the array every entry goes to.
+- To see what a real request looks like, start the app against the dev database and call `GET /tasks/my` with a token; check that the default sink prints one JSON line per entry.
+- Mutation check: temporarily break your own code (return the wrong status, log twice, remove the header) and confirm a test notices.
+
+---
+
+## Level 4 – Design questions you should be able to defend
+
+1. Why is the request id generated in a middleware and not in the interceptor or a guard? What would be lost?
+2. Why must the id never be taken from the client, and what is the cost of that choice for a real distributed system?
+3. Why does a `401` request have a `request.completed` entry but no `request.timing` entry? Where in the lifecycle does the guard sit?
+4. Why does a request with a bad id still produce a `request.timing` entry (outcome `error`, status 400)?
+5. Why `tap` and not `map` for logging? What would `map` break?
+6. What is the difference between logging in `tap({ complete })` and in `finalize`? What would each do if the client disconnected?
+7. Why is the limit *rejected* instead of reduced? What would a client that asks for 10 000 items experience in each design?
+8. Why is `@SkipRequestTiming(false)` useful, and why is "no metadata means timed" the right default?
+9. Could `ConfigService` from `@nestjs/config` replace the custom provider? What would you gain, what would you lose, and why was it not used here?
+10. What would change if the interceptor were registered on one controller instead of globally?
