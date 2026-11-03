@@ -1,5 +1,6 @@
-import type { Provider } from '@nestjs/common';
+import { type Provider } from '@nestjs/common';
 import { REQUEST_PROCESSING_CONFIG } from '../tokens/request-processing.tokens.js';
+import { loadRequestProcessingConfig } from './request-processing.config.js';
 
 /**
  * Registration of the `RequestProcessingConfig` provider.
@@ -17,6 +18,6 @@ import { REQUEST_PROCESSING_CONFIG } from '../tokens/request-processing.tokens.j
 export const requestProcessingConfigProvider: Provider = {
   provide: REQUEST_PROCESSING_CONFIG,
   useFactory: () => {
-    throw new Error('Not implemented');
+    return loadRequestProcessingConfig(process.env);
   },
 };

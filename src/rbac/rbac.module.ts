@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { RequestProcessingModule } from '../common/request-processing.module.js';
+import { ProjectsModule } from '../projects/projects.module.js';
+import { Task } from '../tasks/entities/task.entity.js';
 import { User } from '../users/entities/user.entity.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
 import { TaskOwnerGuard } from './guards/task-owner.guard.js';
-import { ProjectsModule } from '../projects/projects.module.js';
-import { Task } from '../tasks/entities/task.entity.js';
 import { RbacTasksController } from './tasks/rbac-tasks.controller.js';
 import { RbacTasksService } from './tasks/rbac-tasks.service.js';
 import { RbacUsersController } from './users/rbac-users.controller.js';
@@ -27,7 +28,11 @@ import { RbacUsersService } from './users/rbac-users.service.js';
  *       (status, assigneeId, createdById) have their own migration.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([User, Task]), ProjectsModule],
+  imports: [
+    TypeOrmModule.forFeature([User, Task]),
+    ProjectsModule,
+    RequestProcessingModule,
+  ],
   controllers: [RbacUsersController, RbacTasksController],
   providers: [
     RbacUsersService,

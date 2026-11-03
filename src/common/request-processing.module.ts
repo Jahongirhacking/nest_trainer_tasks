@@ -1,4 +1,11 @@
-import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
+import {
+  Module,
+  type MiddlewareConsumer,
+  type NestModule,
+} from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { RequestTimingInterceptor } from './interceptors/request-timing.interceptor.js';
+import { RequestLoggingMiddleware } from './middleware/request-logging.middleware.js';
 import { NestRequestLogger } from './providers/nest-request-logger.js';
 import { requestProcessingConfigProvider } from './providers/request-processing.provider.js';
 import {
@@ -25,11 +32,13 @@ import {
   providers: [
     requestProcessingConfigProvider,
     { provide: REQUEST_LOGGER, useClass: NestRequestLogger },
+    { provide: APP_INTERCEPTOR, useClass: RequestTimingInterceptor },
   ],
   exports: [REQUEST_PROCESSING_CONFIG, REQUEST_LOGGER],
 })
 export class RequestProcessingModule implements NestModule {
   configure(_consumer: MiddlewareConsumer): void {
     // TODO: consumer.apply(...).forRoutes(...)
+    _consumer.apply(RequestLoggingMiddleware).forRoutes('*');
   }
 }

@@ -22,5 +22,11 @@ import type { RequestProcessingConfig } from '../interfaces/request-processing-c
 export function loadRequestProcessingConfig(
   _env: NodeJS.ProcessEnv,
 ): RequestProcessingConfig {
-  throw new Error('Not implemented');
+  return {
+    requestLoggingEnabled: _env.REQUEST_LOGGING_ENABLED !== 'false',
+    timingLogsEnabled: _env.REQUEST_TIMING_ENABLED !== 'false',
+    maxPageSize: Number(_env.MAX_PAGE_SIZE) || 100,
+    requestIdHeader: _env.REQUEST_ID_HEADER || 'x-request-id',
+    environment: _env.NODE_ENV || 'development',
+  };
 }

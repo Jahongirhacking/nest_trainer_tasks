@@ -1,3 +1,4 @@
+import { SetMetadata } from '@nestjs/common';
 import { SKIP_REQUEST_TIMING_KEY } from '../tokens/request-processing.tokens.js';
 
 /**
@@ -20,7 +21,5 @@ import { SKIP_REQUEST_TIMING_KEY } from '../tokens/request-processing.tokens.js'
  */
 export const SkipRequestTiming = (
   _skip: boolean = true,
-): MethodDecorator & ClassDecorator => {
-  void SKIP_REQUEST_TIMING_KEY;
-  return () => undefined;
-};
+): MethodDecorator & ClassDecorator =>
+  SetMetadata(SKIP_REQUEST_TIMING_KEY, _skip);

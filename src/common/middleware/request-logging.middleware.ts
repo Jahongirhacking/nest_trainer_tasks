@@ -1,11 +1,14 @@
 import { Inject, Injectable, type NestMiddleware } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { RequestLogger } from '../interfaces/request-log.interface.js';
+import { RequestMetadataInfo } from '../interfaces/request-metadata.interface.js';
 import type { RequestProcessingConfig } from '../interfaces/request-processing-config.interface.js';
 import {
   REQUEST_LOGGER,
   REQUEST_PROCESSING_CONFIG,
 } from '../tokens/request-processing.tokens.js';
+import { sanitizeUrl } from '../utils/sanitizeUrl.js';
 
 /**
  * Runs first for every request (before guards, interceptors and pipes).
@@ -39,6 +42,28 @@ export class RequestLoggingMiddleware implements NestMiddleware {
     // TODO: Log `request.started` (if enabled).
     // TODO: Log `request.completed` when the response finishes (if enabled).
     // TODO: Call next().
-    throw new Error('Not implemented');
+
+    const metadata: RequestMetadataInfo = {
+      requestId: randomUUID(),
+      clientIp: _req.ip,
+      startedAt: new Date(),
+      userAgent: _req.get('user-agent'),
+    };
+
+    _req.requestMetadata = metadata;
+    _res.setHeader(this.config.requestIdHeader, metadata.requestId);
+
+    const url = sanitizeUrl(_req.originalUrl ?? _req.url);
+
+    if (this.config.requestLoggingEnabled) {
+      this.logger.log({
+        event: 'request.started',
+        ...metadata,
+        timestamp: metadata.startedAt.toISOString(),
+        url,
+        method: _req.method,
+      });
+    }
+    _next();
   }
 }

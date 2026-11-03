@@ -1,18 +1,24 @@
 import {
-  type CallHandler,
-  type ExecutionContext,
+  HttpException,
   Inject,
   Injectable,
+  type CallHandler,
+  type ExecutionContext,
   type NestInterceptor,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Observable } from 'rxjs';
+import type { Request, Response } from 'express';
+import { tap, type Observable } from 'rxjs';
 import type { RequestLogger } from '../interfaces/request-log.interface.js';
 import type { RequestProcessingConfig } from '../interfaces/request-processing-config.interface.js';
 import {
   REQUEST_LOGGER,
+  REQUEST_METADATA_PROPERTY,
   REQUEST_PROCESSING_CONFIG,
+  SKIP_REQUEST_TIMING_KEY,
+  UNKNOWN_REQUEST_ID,
 } from '../tokens/request-processing.tokens.js';
+import { sanitizeUrl } from '../utils/sanitizeUrl.js';
 
 /**
  * Measures how long the handler path takes and logs ONE `request.timing` entry
@@ -54,6 +60,40 @@ export class RequestTimingInterceptor implements NestInterceptor {
     // TODO: Capture the start time.
     // TODO: Run the handler and measure for success AND error paths.
     // TODO: Log exactly one `request.timing` entry; do not touch the response.
-    throw new Error('Not implemented');
+    if (!this.config.timingLogsEnabled) return _next.handle();
+    const skipRequestTiming = this.reflector.getAllAndOverride(
+      SKIP_REQUEST_TIMING_KEY,
+      [_context.getHandler(), _context.getClass()],
+    );
+    if (skipRequestTiming) return _next.handle();
+
+    const startTime = new Date();
+    const ctx = _context.switchToHttp();
+    const req = ctx.getRequest<Request>();
+    const res = ctx.getResponse<Response>();
+    let logged = false;
+
+    const log = (statusCode: number, outcome: 'success' | 'error') => {
+      if (logged) return; // exactly one entry
+      logged = true;
+      this.logger.log({
+        event: 'request.timing',
+        requestId:
+          req[REQUEST_METADATA_PROPERTY]?.requestId ?? UNKNOWN_REQUEST_ID,
+        method: req.method,
+        url: sanitizeUrl(req.originalUrl || req.url),
+        statusCode,
+        durationMs: Number(Date.now()) - Number(startTime),
+        outcome,
+      });
+    };
+
+    return _next.handle().pipe(
+      tap({
+        next: () => log(res.statusCode, 'success'),
+        error: (err: unknown) =>
+          log(err instanceof HttpException ? err.getStatus() : 500, 'error'),
+      }),
+    );
   }
 }
