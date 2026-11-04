@@ -42,6 +42,6 @@ export class User {
   updatedAt: Date;
   @OneToMany(() => Task, (task) => task.assignee)
   tasks?: Relation<Task>[];
-  @Column({ enum: Role, default: Role.USER })
+  @Column({ type: 'varchar', default: Role.USER })
   role: Role;
 }

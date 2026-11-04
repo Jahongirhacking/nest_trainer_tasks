@@ -49,8 +49,9 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@CurrentUser() user: SafeUser): SafeUser {
-    return user;
+  me(@CurrentUser() user: SafeUser): Omit<SafeUser, 'role'> {
+    const { role: _role, ...profile } = user;
+    return profile;
   }
 
   @UseGuards(JwtAuthGuard)
