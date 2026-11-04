@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard.js';
@@ -14,6 +15,8 @@ import { PositiveIntParam } from '../../common/decorators/positive-int-param.dec
 import { RequestMetadata } from '../../common/decorators/request-metadata.decorator.js';
 import { SkipRequestTiming } from '../../common/decorators/skip-request-timing.decorator.js';
 import type { RequestMetadataInfo } from '../../common/interfaces/request-metadata.interface.js';
+import type { Pagination } from '../../common/pipes/pagination.pipe.js';
+import { PaginationPipe } from '../../common/pipes/pagination.pipe.js';
 import { ParseResourceIdPipe } from '../../common/pipes/parse-resource-id.pipe.js';
 import type { Task } from '../../tasks/entities/task.entity.js';
 import { CurrentUser } from '../decorators/current-user.decorator.js';
@@ -62,8 +65,8 @@ export class RbacTasksController {
   @Roles(Role.ADMIN, Role.MANAGER)
   @Permissions(Permission.TASKS_READ)
   @Get()
-  findAll(): Promise<Task[]> {
-    return this.tasksService.findAll();
+  findAll(@Query(PaginationPipe) pagination: Pagination): Promise<Task[]> {
+    return this.tasksService.findAll(pagination);
   }
 
   @Roles(Role.ADMIN, Role.MANAGER)

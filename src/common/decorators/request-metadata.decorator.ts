@@ -1,4 +1,5 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
+import { Request } from 'express';
 import type { RequestMetadataInfo } from '../interfaces/request-metadata.interface.js';
 
 /**
@@ -23,8 +24,12 @@ export const RequestMetadata = createParamDecorator(
   (
     _property: keyof RequestMetadataInfo | undefined,
     _context: ExecutionContext,
-  ): RequestMetadataInfo | RequestMetadataInfo[keyof RequestMetadataInfo] | undefined => {
+  ):
+    | RequestMetadataInfo
+    | RequestMetadataInfo[keyof RequestMetadataInfo]
+    | undefined => {
     // TODO: Implement.
-    return undefined;
+    const req = _context.switchToHttp().getRequest<Request>();
+    return _property ? req.requestMetadata?.[_property] : req.requestMetadata;
   },
 );

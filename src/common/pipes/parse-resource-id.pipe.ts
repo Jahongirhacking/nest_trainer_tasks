@@ -1,4 +1,11 @@
-import { Injectable, type ArgumentMetadata, type PipeTransform } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Optional,
+  type ArgumentMetadata,
+  type PipeTransform,
+} from '@nestjs/common';
+import { ParsePositiveIntPipe } from './parse-positive-int.pipe.js';
 
 /**
  * Validates a resource id route parameter and returns it as a number.
@@ -20,7 +27,18 @@ import { Injectable, type ArgumentMetadata, type PipeTransform } from '@nestjs/c
  */
 @Injectable()
 export class ParseResourceIdPipe implements PipeTransform<unknown, number> {
+  constructor(
+    @Optional()
+    private readonly parsePositiveIntPipe: ParsePositiveIntPipe = new ParsePositiveIntPipe(),
+  ) {}
+
   transform(_value: unknown, _metadata: ArgumentMetadata): number {
-    throw new Error('Not implemented');
+    try {
+      return this.parsePositiveIntPipe.transform(_value);
+    } catch {
+      throw new BadRequestException(
+        `Invalid ${_metadata.data ?? 'id'}: must be a positive integer`,
+      );
+    }
   }
 }

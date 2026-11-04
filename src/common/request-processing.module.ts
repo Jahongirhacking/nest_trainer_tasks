@@ -6,6 +6,9 @@ import {
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { RequestTimingInterceptor } from './interceptors/request-timing.interceptor.js';
 import { RequestLoggingMiddleware } from './middleware/request-logging.middleware.js';
+import { PaginationPipe } from './pipes/pagination.pipe.js';
+import { ParsePositiveIntPipe } from './pipes/parse-positive-int.pipe.js';
+import { ParseResourceIdPipe } from './pipes/parse-resource-id.pipe.js';
 import { NestRequestLogger } from './providers/nest-request-logger.js';
 import { requestProcessingConfigProvider } from './providers/request-processing.provider.js';
 import {
@@ -33,8 +36,17 @@ import {
     requestProcessingConfigProvider,
     { provide: REQUEST_LOGGER, useClass: NestRequestLogger },
     { provide: APP_INTERCEPTOR, useClass: RequestTimingInterceptor },
+    ParsePositiveIntPipe,
+    ParseResourceIdPipe,
+    PaginationPipe,
   ],
-  exports: [REQUEST_PROCESSING_CONFIG, REQUEST_LOGGER],
+  exports: [
+    REQUEST_PROCESSING_CONFIG,
+    REQUEST_LOGGER,
+    ParsePositiveIntPipe,
+    ParseResourceIdPipe,
+    PaginationPipe,
+  ],
 })
 export class RequestProcessingModule implements NestModule {
   configure(_consumer: MiddlewareConsumer): void {

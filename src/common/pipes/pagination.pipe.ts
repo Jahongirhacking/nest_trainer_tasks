@@ -1,6 +1,13 @@
-import { Inject, Injectable, type PipeTransform } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+  type PipeTransform,
+} from '@nestjs/common';
 import type { RequestProcessingConfig } from '../interfaces/request-processing-config.interface.js';
 import { REQUEST_PROCESSING_CONFIG } from '../tokens/request-processing.tokens.js';
+import { ParsePositiveIntPipe } from './parse-positive-int.pipe.js';
 
 /** Result of the pagination pipe. */
 export interface Pagination {
@@ -35,16 +42,38 @@ export const DEFAULT_LIMIT = 10;
  *       not a DTO with class-validator.
  */
 @Injectable()
-export class PaginationPipe
-  implements PipeTransform<Record<string, unknown>, Pagination>
-{
+export class PaginationPipe implements PipeTransform<
+  Record<string, unknown>,
+  Pagination
+> {
   constructor(
     @Inject(REQUEST_PROCESSING_CONFIG)
     private readonly config: RequestProcessingConfig,
+    @Optional()
+    private readonly parsePositiveIntPipe: ParsePositiveIntPipe = new ParsePositiveIntPipe(),
   ) {}
 
-  transform(_query: Record<string, unknown>): Pagination {
-    void this.config;
-    throw new Error('Not implemented');
+  transform(query: Record<string, unknown>): Pagination {
+    const { maxPageSize } = this.config;
+    const page = this.parse('page', query['page'], DEFAULT_PAGE);
+    const limit = this.parse(
+      'limit',
+      query['limit'],
+      Math.min(DEFAULT_LIMIT, maxPageSize),
+    );
+    if (limit > maxPageSize)
+      throw new BadRequestException(
+        `"limit" must not be greater than MAX_PAGE_SIZE ${maxPageSize}`,
+      );
+    return { page, limit };
+  }
+
+  private parse(name: string, raw: unknown, fallback: number): number {
+    if (raw === undefined) return fallback;
+    try {
+      return this.parsePositiveIntPipe.transform(raw);
+    } catch {
+      throw new BadRequestException(`"${name}" must be a positive integer`);
+    }
   }
 }

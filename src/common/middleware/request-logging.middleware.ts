@@ -42,6 +42,7 @@ export class RequestLoggingMiddleware implements NestMiddleware {
     // TODO: Log `request.started` (if enabled).
     // TODO: Log `request.completed` when the response finishes (if enabled).
     // TODO: Call next().
+    const startTime = new Date();
 
     const metadata: RequestMetadataInfo = {
       requestId: randomUUID(),
@@ -64,6 +65,20 @@ export class RequestLoggingMiddleware implements NestMiddleware {
         method: _req.method,
       });
     }
+
+    _res.on('finish', () => {
+      if (this.config.requestLoggingEnabled) {
+        this.logger.log({
+          event: 'request.completed',
+          requestId: metadata.requestId,
+          url,
+          method: _req.method,
+          statusCode: _res.statusCode,
+          durationMs: Number(new Date()) - Number(startTime),
+        });
+      }
+    });
+
     _next();
   }
 }
