@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadEnvFile } from '../../src/database/database.config.js';
 import {
   TEST_JWT_AUDIENCE,
@@ -43,4 +46,9 @@ export function applyTestEnv(): void {
   e.JWT_EXPIRES_IN = TEST_JWT_EXPIRES_IN;
   e.JWT_ISSUER = TEST_JWT_ISSUER;
   e.JWT_AUDIENCE = TEST_JWT_AUDIENCE;
+
+  // Task 7: uploaded files of the whole test run go to a throw-away directory
+  // (never a path from `.env`).
+  e.STORAGE_DRIVER = 'local';
+  e.STORAGE_LOCAL_ROOT ??= mkdtempSync(join(tmpdir(), 'trainer-media-env-'));
 }

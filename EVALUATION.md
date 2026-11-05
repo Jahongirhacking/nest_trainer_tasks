@@ -1,70 +1,85 @@
-# Evaluation – Assignment 6 (100 points)
+# Evaluation – Assignment 7 (100 points)
 
 | Area | Points | What is judged |
 |---|---:|---|
-| Middleware implementation | 15 | unique server-generated id, metadata attached, header, `started`/`completed` entries, disabled mode, no secrets, registered for all routes, one `next()` |
-| Interceptor implementation | 20 | one entry on every path, success and error, response and error untouched, async handlers, correct RxJS operators, config flag |
-| Custom pipes | 15 | `ParseResourceIdPipe` and `PaginationPipe`: every invalid input rejected, defaults, maximum from config, error format, relation to `ParsePositiveIntPipe` |
-| Custom providers and DI | 15 | config function, validation and fail-fast, provider pattern justified, injection by token, no hard-coded config, module boundaries, no circular imports |
-| ExecutionContext and decorators | 15 | `@RequestMetadata()` via `ExecutionContext`, small responsibility, no leakage, `@CurrentUser()` reused, correct wiring of the demo routes |
-| Metadata and Reflector | 5 | `@SkipRequestTiming()` records metadata only, method-over-class precedence, predictable default |
-| Unit and E2E tests | 10 | all provided tests green and untouched, extra tests meaningful, no timing/format brittleness |
-| Code quality and documentation | 5 | naming, small classes, types instead of `any`, `NOTES.md` answers the 14 questions and the design decisions |
+| Single and multiple file upload | 15 | both endpoints work, correct field names/status codes, thin controller, all-or-nothing multi-upload, metadata for every file, owner association |
+| Multer configuration | 10 | limits (size, files, parts/fields), deliberate storage choice, configuration outside the controller, env-driven limits, 413/400 mapping |
+| File validation and security | 20 | four validators, signature check against spoofing, extension/MIME consistency, empty/oversized files, safe error messages, no trust in client data |
+| Storage abstraction and DI | 15 | interface + token + provider, `LocalStorageService` correctness, generated keys, containment, no overwrite, `MediaService` independent of `fs`, config function |
+| Database metadata integration | 10 | entity, migration, FK/constraints/index, status lifecycle, consistency in both failure scenarios |
+| Retrieval, download and deletion | 10 | list/get/download/delete behaviour, safe headers, deletion policy, missing-object handling |
+| Ownership and authorization | 10 | 404 for others, admin rule, reuse of Task 4/5 (no second auth), Task 5 RBAC intact |
+| Unit, integration and E2E tests | 5 | all given tests green and untouched, meaningful additional tests, no brittle assertions |
+| Architecture and documentation | 5 | module boundaries, naming, types instead of `any`, `NOTES.md` answers the questions and justifies the decisions |
 | **Total** | **100** | |
+
+Security counts twice: a vulnerability costs points in its area **and** triggers a deduction from the list of critical failures below.
 
 ## How each area is scored
 
-### Middleware implementation (15)
-- **Full (13–15):** every contract of Module A holds; the id is generated, never copied from the client; the header name is configurable; `completed` is logged from the right event; the url is sanitized in one place; applies to 401/403/404 responses; `next()` once.
-- **Partial (5–12):** works on the happy path but misses one of: disabled mode, ignoring the client's id, the configured header, logging 401/404 requests, sanitizing query values, or duplicates the sanitizing logic.
-- **Zero:** not registered, or no id, or secrets logged (see critical failures).
+### Single and multiple file upload (15)
+- **Full (13–15):** both endpoints satisfy the contract and the e2e tests; the controller only wires; multiple upload is truly all-or-nothing, including when the *second or last* storage call fails; every row belongs to the caller.
+- **Partial (5–12):** single upload works but multiple upload leaves files after a failure, or statuses are wrong (e.g. 422, 200), or the controller contains business logic.
+- **Zero:** handlers still answer 501, or files are accepted without being stored/recorded.
+- **Critical:** the response contains the storage key or an absolute path.
 
-### Interceptor implementation (20)
-- **Full (17–20):** exactly one `request.timing` entry on success and on error; correct status code for `HttpException` and other errors; same value / same error instance; subscribes once; honours the config flag and the skip metadata; the notes explain `tap` / `map` / `catchError` / `finalize` correctly.
-- **Partial (7–16):** logs on success but not on error (or twice); wrong status on errors; changes or wraps the response; uses `map` for side effects; ignores a flag.
-- **Zero:** throws `Not implemented`, never registered, or alters the response/error.
+### Multer configuration (10)
+- **Full (9–10):** `limits.fileSize`, `files`, `fields`, `parts`, `fieldSize` set from validated configuration; storage chosen with a written justification; options built outside the controller; oversize → 413, too many files / unexpected field → 400.
+- **Partial (4–8):** only size limited; limits hard-coded; unbounded MemoryStorage justified poorly; configuration inside the controller.
+- **Zero:** Multer left with defaults (unbounded in-memory upload).
+- **Critical:** an upload endpoint with no size limit.
 
-### Custom pipes (15)
-- **Full (13–15):** all spec cases pass for both pipes; the maximum is read from the injected config; default `limit` respects the maximum; non-string / array inputs are rejected; messages name the parameter; the relation to `ParsePositiveIntPipe` is a deliberate reuse (not a copy) and explained; `GET /tasks` is wired and paginates.
-- **Partial (5–12):** valid cases work but some invalid inputs slip through (`1e3`, `+2`, arrays, huge numbers), or the maximum is a constant, or the logic of `ParsePositiveIntPipe` is duplicated.
-- **Zero:** pipes not implemented or not used by any route.
+### File validation and security (20)
+- **Full (17–20):** all four validators correct and reusable; magic bytes checked for JPEG, PNG, WebP (including the RIFF/WAV trap) and PDF; declared type must match the content; extension rules (double extension, case, trailing characters) correct; empty files rejected; unknown content never accepted when it cannot be checked; messages safe.
+- **Partial (7–16):** MIME and extension checked but the content is not (or only for some types); spoofed types accepted in one combination; validators duplicated or not reusable.
+- **Zero:** validation relies on `Content-Type`/extension only.
+- **Critical:** an HTML/SVG/executable upload can be stored and served back; client-provided MIME type is the only proof.
 
-### Custom providers and DI (15)
-- **Full (13–15):** `loadRequestProcessingConfig` is pure and complete; invalid values throw naming the variable; the object is frozen; the provider reads the environment when the module is created; at least one provider pattern used and justified; `AppModule` and `RbacModule` import the module; middleware, interceptor and pipe get the config by token.
-- **Partial (5–12):** works with defaults but silently accepts bad values, reads `process.env` at import time, or the config is imported as a constant instead of injected.
-- **Zero:** no provider, or configuration hard-coded.
+### Storage abstraction and DI (15)
+- **Full (13–15):** `MediaService` depends only on `STORAGE_SERVICE`; the provider uses a factory/class with injected validated config; keys come from a CSPRNG and are relative; traversal and symlink escapes blocked; exclusive create, no overwrite, unique under concurrency; `delete` idempotent; a second implementation could be added without editing the service.
+- **Partial (5–12):** works but the service imports `fs`/`path`, or keys contain user input, or traversal is checked only by string search, or an overwrite race exists.
+- **Zero:** the filesystem is used directly from controller/service.
+- **Critical:** the original file name or any user input becomes part of the path; the storage root is publicly served.
 
-### ExecutionContext and decorators (15)
-- **Full (13–15):** `@RequestMetadata()` is implemented with `switchToHttp().getRequest()`, returns the whole object or one field, `undefined` when absent, and exposes only the four fields; the demo routes work for every role; the authenticated user comes from the existing `@CurrentUser()`.
-- **Partial (5–12):** works but reads headers/user directly, throws when metadata is missing, or duplicates `@CurrentUser()`.
-- **Zero:** placeholder left, or the controller reads `@Req()` to do the job.
+### Database metadata integration (10)
+- **Full (9–10):** migration creates the table with FK, explicit `ON DELETE`, UNIQUE, NOT NULL, CHECKs, index, `timestamptz`; entity matches; status moves UPLOADING → ACTIVE only after storage success; both failure scenarios leave neither an ACTIVE row nor an object; notes explain the crash window and the cleanup job.
+- **Partial (4–8):** missing constraints/index, or the status is always ACTIVE, or only one failure scenario is handled.
+- **Zero:** metadata not persisted, or `synchronize` used instead of a migration.
+- **Critical:** file content stored in PostgreSQL; `ON DELETE CASCADE` that orphans objects without cleanup.
 
-### Metadata and Reflector (5)
-- **Full (5):** the decorator stores the given boolean under the given key on class and method; the interceptor uses the right `Reflector` helper so that the method wins and "absent" means "timed".
-- **Partial (2–4):** works for methods only, or precedence is wrong in one case.
-- **Zero:** skipping is done with a hard-coded route list or not at all.
+### Retrieval, download and deletion (10)
+- **Full (9–10):** list/get/download/delete as specified; stream (not a full in-memory copy) for download; `attachment` + `nosniff` + correct type; filename encoded safely for quotes, non-ASCII, control and very long names; deletion order and failure policy as documented and tested.
+- **Partial (4–8):** works but `inline`, no `nosniff`, name concatenated into the header, or deletion removes the row before the object succeeded.
+- **Zero:** endpoints not implemented.
+- **Critical:** header injection through the file name; a path or key accepted from the client.
 
-### Unit and E2E tests (10)
-- **Full (9–10):** `pnpm test` green (610+ tests), provided tests untouched, `pnpm build` and `pnpm lint` clean, extra tests added for own decisions, the database e2e passes (once the `User.role` issue in the README is solved) or its failure is explained.
-- **Partial (4–8):** a few provided tests red, or tests modified without justification.
-- **Zero:** tests deleted, skipped or weakened.
+### Ownership and authorization (10)
+- **Full (9–10):** every id-based operation checks ownership; others get 404 indistinguishable from "unknown id"; admin may read/download/delete but `GET /media` stays own-only; `JwtAuthGuard` reused, no new roles; Task 5 behaviour unchanged.
+- **Partial (4–8):** checks missing on one operation, or 403 leaks existence, or an `if (role === ...)` in the controller.
+- **Zero:** no authentication on the media routes.
+- **Critical:** user A can read, download or delete user B's file by changing the id (IDOR).
 
-### Code quality and documentation (5)
-- **Full (5):** consistent with the codebase, small focused classes, no `any` where a type exists, comments only where they help, `NOTES.md` complete and in the student's own words.
-- **Partial (2–4):** works but with duplication or thin notes.
-- **Zero:** no notes.
+### Unit, integration and E2E tests (5)
+- **Full (5):** all given tests pass, none modified or skipped; additional tests cover your own decisions (cleanup failures, key format, headers).
+- **Partial (2–4):** some given tests fail or were edited to pass; no additional tests.
+- **Zero:** tests deleted, skipped, or weakened.
 
-## Critical failures
+### Architecture and documentation (5)
+- **Full (5):** clean module boundaries (`StorageModule` exports only the token), no circular imports, no `any` in public signatures, `NOTES.md` answers the ten questions and documents the decisions.
+- **Partial (2–4):** decisions undocumented, or leaky boundaries.
+- **Zero:** nothing documented.
 
-Any of these means the assignment is **not complete**, whatever the test results (the score is capped at 59):
+## Critical failures (deductions on top of the area scores)
 
-- a token, cookie, password, body value or sensitive query value in a log entry
-- a request id taken from the client
-- a Task 5 authorization rule weakened (a guard removed, reordered, or a route open to anonymous callers)
-- the interceptor changing the response body, the status or the error
-- business logic or database access in the middleware or in the interceptor
-- the provided tests edited to make them pass, or assertions weakened
+| Failure | Deduction |
+|---|---:|
+| IDOR: another user's file is readable/downloadable/deletable | −15 |
+| Path traversal possible through name, extension or key | −15 |
+| Spoofed content (HTML/script/executable) accepted and served back | −10 |
+| Upload without a size/count limit | −10 |
+| Internal path, stack trace, storage key or driver message in a response | −5 each (max −10) |
+| Uploads reachable without authentication or from a public directory | −10 |
+| Given tests edited, skipped or weakened to pass | −10 and the affected area counts as zero |
+| Second authentication system or new roles introduced | −5 |
 
-Passing tests alone does not guarantee 100: the review reads the code for the quality of the RxJS, the registration choices and the answers in `NOTES.md`.
-
-**Grade bands:** 90–100 excellent · 75–89 good · 60–74 pass · < 60 redo.
+The total is never below 0.

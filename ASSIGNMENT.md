@@ -1,285 +1,266 @@
-# Assignment 6 – Request Processing System: Middleware, Interceptors, Pipes, Custom Providers and ExecutionContext
+# Assignment 7 – Secure Media Upload Service: Multer, File Validation, Storage Abstraction
 
 **Difficulty:** Advanced
-**Builds on:** Assignment 5 (RBAC, see [docs/task_5/](docs/task_5/ASSIGNMENT.md)). You keep its guards, roles, permissions, ownership and assignment rules exactly as they are.
-**Stack:** NestJS 12, TypeScript, RxJS 7, class-validator, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
+**Builds on:** Assignment 6 ([docs/task_6/](docs/task_6/ASSIGNMENT.md)) and the authentication of Assignment 4 / RBAC of Assignment 5. Everything from Tasks 1–6 stays as it is.
+**Stack:** NestJS 12, TypeScript, `@nestjs/platform-express` + Multer, TypeORM + PostgreSQL, Vitest + Supertest, pnpm, Node 24 (`.nvmrc`)
 
-> Rule of the game: the interfaces, tokens, test helpers, the sink that prints log lines, the demo routes and **all tests** are given. **The middleware, the interceptor, the two pipes, the configuration provider, the two decorators and the metadata lookup are yours.** Everything marked `TODO` is intentionally unfinished and throws `Not implemented` or returns nothing.
+> Rule of the game: the interfaces, injection tokens, enums, the allowed-type table, the test helpers (fixtures, fake storage, test app) and **all tests** are given. **Upload handling, Multer configuration, the validators, the storage implementation, persistence, download, deletion and cleanup are yours.** Everything marked `TODO` is intentionally unfinished and throws `Not implemented` (or answers 501).
 >
-> The new code lives in [src/common/](src/common/) (shared infrastructure, like the Task 4 pipe and filter that are already there) and a few routes in [src/rbac/tasks/](src/rbac/tasks/rbac-tasks.controller.ts). The Task 6 unit and HTTP tests need **no database**.
+> You will only learn something if you write the file handling yourself. Nothing here is a hidden solution; `HINTS.md` has three levels, please read them in order.
 
 ## 1. Learning objectives
 
-- Follow one HTTP request through the NestJS lifecycle and say, for each stage, what it is for and what it can see
-- Middleware vs. interceptor, guard vs. pipe, pipe vs. DTO validation: pick the right tool and defend it
-- `ExecutionContext`, `CallHandler`, `Observable` and the RxJS operators an interceptor needs (`tap`, `map`, `catchError`, `finalize`)
-- Custom providers (`useValue`, `useClass`, `useFactory`, `useExisting`), injection tokens, and keeping configuration out of business code
-- Parameter decorators (`createParamDecorator`) and metadata decorators read through `Reflector`
-- Writing observability code that never changes the behaviour, the response or the security of the application
+1. How `multipart/form-data` is built and how Multer parses it
+2. What `FileInterceptor` / `FilesInterceptor` do, and where in the request lifecycle they run
+3. Why a file name, an extension and a MIME type sent by the client prove nothing, and what *does* (the content)
+4. `MemoryStorage` vs `DiskStorage`: memory pressure, temporary files, cleanup
+5. A storage abstraction (interface + injection token + provider) that lets you replace the local disk with S3 / Cloudflare R2 without touching business logic
+6. Metadata in PostgreSQL, bytes elsewhere, and keeping the two consistent when there is no shared transaction
+7. Ownership checks that do not leak the existence of other users' files
+8. Path traversal, unrestricted upload size, XSS through served uploads, header injection through file names
+9. Testing uploads without a cloud account and without touching the real file system
 
 ## 2. Scope
 
-**In scope:** request id + request logging middleware, timing interceptor, `ParseResourceIdPipe`, `PaginationPipe`, the configuration provider, `@RequestMetadata()`, `@SkipRequestTiming()`, wiring them into the Task 5 application.
+**In scope:** `POST /media/upload`, `POST /media/upload/multiple`, `GET /media`, `GET /media/:id`, `GET /media/:id/download`, `DELETE /media/:id`; Multer configuration; four reusable validators; `StorageService` + `LocalStorageService`; `Media` entity + migration; ownership rules; error handling; tests you add yourself.
 
-**Out of scope (do not build them):** a logging library, log files or rotation, distributed tracing, request-scoped providers (`Scope.REQUEST`), caching, rate limiting, a new database table. Do not touch the Task 1–5 logic. No new dependencies are needed.
+**Out of scope (do not build them):** S3 / R2 implementations (only keep the design open for them), image processing or thumbnails, virus scanning, resumable or chunked uploads, signed URLs, a background job queue, a new login mechanism, new roles or permissions. Do not touch the Task 1–6 logic.
 
 ## 3. The application you are extending
 
-What exists already (found by reading Task 5, so you do not duplicate it):
-
-| Existing | Where | What it means for Task 6 |
+| Existing | Where | What it means for Task 7 |
 |---|---|---|
-| `RbacTasksController` with `JwtAuthGuard`, `RolesGuard`, `PermissionsGuard` | `src/rbac/tasks/` | The controller you extend. Guards run **before** everything you add except middleware. |
-| `@CurrentUser()` | `src/rbac/decorators/current-user.decorator.ts` | **Reuse it.** Do not write another one. |
-| `ParsePositiveIntPipe`, `@PositiveIntParam()` | `src/common/pipes`, `src/common/decorators` | Task 4/5 already validate `:id` for the other routes. See Module C. |
-| `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`, `transform`) + `GlobalExceptionsFilter` | `src/app.setup.ts` | **Global pipe and filter.** They shape every error and they run *before* your parameter pipes. |
-| `ResponseInterceptor` | `src/common/interceptors/response.interceptor.ts` | **Not registered anywhere.** It wraps the body in an envelope. Do not register it and do not copy that behaviour: your interceptor must not change the response. |
-| `RbacModule` (controllers, services, guards) | `src/rbac/rbac.module.ts` | Imported by `AppModule`. The pipes you add are used by its controller. |
-| Task 5 HTTP tests on in-memory repositories | `src/rbac/*.spec.ts`, `test/helpers/rbac-app.ts` | The model for the Task 6 HTTP tests. They must stay green. |
+| JWT authentication (`JwtAuthGuard`, "jwt" strategy loading the user from PostgreSQL) | `src/auth/` | **Reuse it.** `MediaController` already has `@UseGuards(JwtAuthGuard)`. Do not write a second auth system. |
+| `@CurrentUser()` (typed with `role`) | `src/rbac/decorators/current-user.decorator.ts` | **Reuse it.** `request.user` is `{ id, email, role }`. |
+| `Role.ADMIN` / `Role.USER` | `src/rbac/enums/role.enum.ts` | The only roles. Do not create new ones. |
+| Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`, `transform`) + `GlobalExceptionsFilter` | `src/app.setup.ts`, `src/common/filters/` | Shapes every error (`statusCode`, `error`, `message`, optional `errors`). Unknown **text** fields of a multipart body hit this pipe. |
+| `PaginationPipe`, `ParseResourceIdPipe` (Task 6) | `src/common/pipes/` | `ParseResourceIdPipe` is for integer ids; media ids are **UUIDs**, so think about what to use instead. `PaginationPipe` fits `GET /media`, but read the note in `query-media.dto.ts`. |
+| `RequestProcessingModule` (request id, logging, timing) | `src/common/` | Already applies to the new routes. A request log must never contain file content or secrets. |
+| Task 6 config pattern (`loadRequestProcessingConfig` + a `useFactory` provider + a token) | `src/common/providers/` | The model for `loadStorageConfig` / `loadUploadLimits`. |
+| `autoLoadEntities: true`, `synchronize: false`, migrations only | `src/database/` | Entities are registered with `forFeature([...])`; the schema comes from a migration. |
+| `InMemoryRepository` | `test/helpers/` | The fake repository used by `media.service.spec.ts`. |
 
-Task ids are **positive integers** (serial primary keys), not UUIDs.
+**Integration decisions (fixed by the assignment):**
+- Media ids are **UUIDs**; user ids stay integers (`uploadedById` references `users.id`).
+- Authorization is by **ownership**, plus: `ADMIN` may read, download and delete any file (existing `Role.ADMIN`, no new permission). `GET /media` lists only the caller's own files, even for an admin.
+- A file that belongs to someone else answers **404**, never 403 (do not confirm that the id exists).
+- Only **ACTIVE** files are visible through the API.
+- Tests use **Vitest**, not Jest, because the repository does.
 
-What this task adds (given as scaffolding):
-
-```text
-src/common/
-  tokens/request-processing.tokens.ts          injection tokens + metadata keys
-  interfaces/request-metadata.interface.ts     RequestMetadataInfo, RequestWithMetadata
-  interfaces/request-processing-config.interface.ts
-  interfaces/request-log.interface.ts          structured log entries + RequestLogger
-  providers/request-processing.config.ts       loadRequestProcessingConfig()          TODO
-  providers/request-processing.provider.ts     the config provider registration       TODO
-  providers/nest-request-logger.ts             the default log sink                   GIVEN
-  middleware/request-logging.middleware.ts                                            TODO
-  interceptors/request-timing.interceptor.ts                                          TODO
-  decorators/request-metadata.decorator.ts                                            TODO
-  decorators/skip-request-timing.decorator.ts                                         TODO
-  pipes/parse-resource-id.pipe.ts                                                     TODO
-  pipes/pagination.pipe.ts                                                            TODO
-  request-processing.module.ts                 registration, `configure()`            TODO
-src/rbac/tasks/rbac-tasks.controller.ts        new routes (see section 6)
-src/rbac/tasks/rbac-tasks.service.ts           findAll(pagination?)                   GIVEN
-```
-
-## 4. The request lifecycle
+## 4. How a multipart upload travels (read this before coding)
 
 ```text
-Incoming HTTP Request
+Client                                        Server
+------                                        ------
+POST /media/upload
+Content-Type: multipart/form-data; boundary=XYZ
+Authorization: Bearer <jwt>
         |
-        v
-Middleware                      (Express level; no ExecutionContext, no route metadata)
+        |  --XYZ
+        |  Content-Disposition: form-data; name="file"; filename="cat.jpg"
+        |  Content-Type: image/jpeg            <- all three are CLIENT-CHOSEN text
         |
+        |  <raw bytes>
+        |  --XYZ--
         v
-Guards                          (JwtAuthGuard -> RolesGuard -> PermissionsGuard -> TaskOwnerGuard)
-        |
-        v
-Interceptors (before)           (code before next.handle())
-        |
-        v
-Pipes                           (global ValidationPipe first, then parameter-level pipes)
-        |
-        v
-Controller handler
-        |
-        v
-Service
-        |
-        v
-Interceptors (after)            (operators on the Observable, in reverse order)
-        |
-        v
-HTTP response
+ middleware          request id, logging (Task 6)
+ guards              JwtAuthGuard: who are you? (401)        <- BEFORE the body is parsed
+ interceptor         FileInterceptor -> Multer parses the stream, enforces limits,
+                     puts the file in `req.file` (memory buffer or temp file)
+ pipes               global ValidationPipe (text fields) + your file pipe (the file)
+ controller          @UploadedFile() file  ->  MediaService
+ service             validate state, store bytes via StorageService, save metadata
+ filters             any exception -> JSON error envelope
 ```
 
-**Exception filters** are not a stage on this line: they sit "around" it. An exception thrown while the request travels through guards, interceptors, pipes, the handler or the service ends up in the exception filters (here the global `GlobalExceptionsFilter`), which turn it into the JSON error response. Figure out *exactly* which stages are covered and what that means for an interceptor that wants to measure a request that fails (Module B and the HTTP tests ask for it).
+Questions to answer in your `NOTES.md` (they are not answered anywhere in the repo):
 
-Be able to answer these. The answers are not in this file (see `HINTS.md`, level 1, for where to look):
-
-1. What is the responsibility of middleware?
-2. Why do guards execute before pipes?
-3. What is the difference between middleware and interceptors?
-4. Why can interceptors execute code before and after the handler?
-5. What does `ExecutionContext` provide?
-6. What is the purpose of `CallHandler`?
-7. Why do interceptors use Observables?
-8. What is the difference between `tap`, `map` and `finalize`?
-9. What is the difference between a pipe and a DTO validator?
-10. When should a custom provider be used?
-11. What is the difference between `useValue`, `useClass` and `useFactory`?
-12. How does `Reflector` retrieve metadata?
-13. How do custom decorators access the current request?
-14. What happens when an exception is thrown inside an interceptor or a controller?
+1. Which stage can reject an oversized upload *before* all bytes are read, and which stage only sees it afterwards?
+2. Why does the 401 for a missing token come before Multer touches the body?
+3. What is in `file.buffer` with MemoryStorage and with DiskStorage? Who deletes the temp file when validation fails?
+4. What happens to the process when 200 users upload 50 MB files into memory at the same time?
+5. Name three things in a multipart part an attacker controls and one thing they do not.
+6. Why is `file.mimetype` not evidence? What is?
+7. Why is the original file name unusable as a storage name, and where *is* it still useful?
+8. Why should a storage key come from a CSPRNG and not from a hash of the content or a counter?
+9. Why must a downloaded upload carry `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`?
+10. What can go wrong between "file written" and "row saved", and in which order do you do the two so the failure is cheap to repair?
 
 ## 5. Modules
 
-All contracts below are enforced by the tests. They are written in the TODO comments of the scaffold too.
+### Module A – Single file upload (`POST /media/upload`)
 
-### Module A – Request logging middleware
+Field name `file`; `multipart/form-data`; authenticated; `201` with the metadata (never the storage key, a path or the owner id):
 
-`RequestLoggingMiddleware` runs for **every** request, including requests that a guard will reject and routes that do not exist.
-
-1. Generate a **new unique request id** for every request, on the server. An id sent by the client (`X-Request-Id`) is **never** reused: it would let a client forge entries in your logs.
-2. Build a `RequestMetadataInfo` – exactly `{ requestId, startedAt, clientIp, userAgent }` – and attach it to the request under `REQUEST_METADATA_PROPERTY`.
-3. Send the id in the response header named by `config.requestIdHeader`.
-4. Log (through the injected `RequestLogger`, never `console`):
-   - `request.started` immediately: `requestId`, `method`, `url`, `timestamp` (ISO-8601), `clientIp`, `userAgent`
-   - `request.completed` when the response has been sent: `requestId`, `method`, `url`, `statusCode`, `durationMs`
-5. `config.requestLoggingEnabled === false` → no entries at all, but the id, the metadata and the header still work.
-6. Call `next()` exactly once. No business logic, no database access, no knowledge of any controller.
-
-### Module B – Request timing interceptor
-
-`RequestTimingInterceptor` logs **one** `request.timing` entry per handled request: `requestId`, `method`, `url`, `statusCode`, `durationMs`, `outcome` (`"success"` | `"error"`).
-
-- Success: `statusCode` is the response's. Error: `statusCode` is the `HttpException`'s status, `500` for any other error.
-- The caller receives the handler's stream untouched: the same object on success, the **same error instance** on failure. Nothing is added, wrapped or swallowed.
-- Exactly one entry on every path; asynchronous handlers work; the handler is subscribed to once.
-- No entry when `config.timingLogsEnabled === false` or when the route is skipped (Module F). The handler still runs.
-- `requestId` comes from the request metadata set by the middleware; `UNKNOWN_REQUEST_ID` when it is missing.
-- You choose the RxJS operators. In your notes explain what each one you chose does on the success and the error path, and why `map` would be the wrong tool.
-
-Two requests measure time differently by design: the middleware's `request.completed` covers guards, pipes, filters and the write of the response; the interceptor's `request.timing` covers only the handler path. A request that a guard rejects has the first and not the second. The HTTP tests check this.
-
-### Module C – Custom pipes
-
-**`ParseResourceIdPipe`** validates a resource id parameter and returns it as a **number**: only positive integers written as plain decimal digits are accepted (see the table in the pipe's comment). Everything else, including non-string input, is a `BadRequestException` that names the parameter. It is used by `GET /tasks/:id`.
-
-`ParsePositiveIntPipe` (Task 4) does something very close. Decide how the two relate and defend the choice: reuse, extend, compose or replace. Copy-pasting its logic is not an answer.
-
-**`PaginationPipe`** turns the query `?page=2&limit=10` into `{ page: 2, limit: 10 }`:
-
-- defaults `page = 1`, `limit = 10` (never above the configured maximum)
-- plain decimal digit strings only; `0`, negatives, decimals, exponents, empty strings, words, repeated parameters (`?page=1&page=2`) and values beyond `Number.MAX_SAFE_INTEGER` are `400`
-- a `limit` above `config.maxPageSize` is **rejected** (`400`), not silently reduced; `limit === maxPageSize` is fine
-- the maximum comes from the injected configuration, never from a constant
-- the result has exactly `page` and `limit`
-
-Be ready to explain when a custom pipe is the right tool and when `ValidationPipe` with a DTO is. (Hint: look at what already validates `POST /tasks`.)
-
-### Module D – Custom provider and dependency injection
-
-`RequestProcessingConfig` is built from the environment, validated once at startup, and injected through `REQUEST_PROCESSING_CONFIG`:
-
-| Variable | Field | Default | Rules |
-|---|---|---|---|
-| `REQUEST_LOGGING_ENABLED` | `requestLoggingEnabled` | `true` | `true`, `false`, `1`, `0`, any letter case |
-| `REQUEST_TIMING_ENABLED` | `timingLogsEnabled` | `true` | same |
-| `MAX_PAGE_SIZE` | `maxPageSize` | `100` | positive integer in plain decimal digits |
-| `REQUEST_ID_HEADER` | `requestIdHeader` | `x-request-id` | letters, digits, `-`; stored in lower case |
-| `NODE_ENV` | `environment` | `development` | any value |
-
-- `loadRequestProcessingConfig(env)` is a pure function of the `env` object it gets. It never reads `process.env` itself and never modifies its argument.
-- A variable that is **unset** gets its default. A variable that is **set but invalid** (including the empty string) makes it throw an `Error` whose message names the variable. The application must not start with a broken configuration.
-- The returned object is frozen.
-- `requestProcessingConfigProvider` must use **at least one** of `useValue`, `useClass`, `useFactory`, `useExisting`, call `loadRequestProcessingConfig(process.env)` **when the module is created** (not when the file is imported), and be injectable into the middleware, the interceptor and the pipe. Explain in your notes why that pattern fits.
-- Middleware, interceptor and pipe contain no hard-coded configuration and no circular dependency.
-
-### Module E – `ExecutionContext` and `@RequestMetadata()`
-
-`@RequestMetadata()` returns the metadata the middleware recorded; `@RequestMetadata('requestId')` returns one field. It reads only that, through `ExecutionContext`. It returns `undefined` (no exception) when the middleware did not run. It exposes nothing else: no headers, no user, no body. For the authenticated user use the existing `@CurrentUser()`.
-
-### Module F – Metadata-driven behaviour: `@SkipRequestTiming()`
-
-- `@SkipRequestTiming()` works on a method and on a controller; it only records metadata under `SKIP_REQUEST_TIMING_KEY`, with the boolean it is given (default `true`).
-- `@SkipRequestTiming(false)` on a method turns timing back **on** in a controller that skips it.
-- Precedence: method over controller; no metadata at all means the route **is** timed.
-- The interceptor reads the metadata with `Reflector`.
-
-## 6. API
-
-Authentication and authorization are the Task 5 ones. The new routes are in `RbacTasksController` and are declared **before** the `:id` routes, so `:id` never captures them.
-
-| Method | Endpoint | Access | Demonstrates |
-|---|---|---|---|
-| GET | `/tasks?page=&limit=` | ADMIN, MANAGER | `PaginationPipe`. The body is still a plain array. **You wire the pipe** (TODO in the controller). |
-| GET | `/tasks/:id` | ADMIN, MANAGER (`tasks.read`) | `ParseResourceIdPipe` (given wiring) |
-| GET | `/tasks/request-info` | any authenticated user | `@RequestMetadata()` → returns the four metadata fields |
-| GET | `/tasks/processing-info` | any authenticated user | request id + `@CurrentUser()` + an async handler (waits ~50 ms): `{ requestId, userId }` |
-| GET | `/tasks/skip-timing` | any authenticated user | `@SkipRequestTiming()` (given wiring) |
-
-Errors keep the existing envelope `{ statusCode, error, message, errors? }` (the global filter). Authorization still wins over validation: a USER who sends a bad id gets `403`, an anonymous caller `401`.
-
-## 7. Sensitive data
-
-No log entry may contain: an `Authorization` header or any token, cookies, passwords, request bodies, or the **values** of sensitive query parameters (a request like `GET /tasks/my?access_token=...&password=...` must not leak them through `url`). Decide what counts as sensitive and implement it once, in one place. The entries are typed so that headers and bodies cannot even be put in them – keep it that way.
-
-## 8. Implementation checklist (recommended order)
-
-1. Read the tests of Module D. Implement `loadRequestProcessingConfig()`, then register the provider. `pnpm test:request` → provider specs green.
-2. Pipes: `ParseResourceIdPipe`, then `PaginationPipe`.
-3. `RequestMetadata` decorator and `SkipRequestTiming` decorator (metadata only).
-4. `RequestLoggingMiddleware`. Register it in `RequestProcessingModule.configure()` for all routes.
-5. `RequestTimingInterceptor`. Register it (global or per controller – decide and defend).
-6. Wire the rest: `PaginationPipe` on `GET /tasks`, import `RequestProcessingModule` in `RbacModule` (the pipe needs the config token) and in `AppModule`.
-7. Run everything (`pnpm test`), then the database e2e (`pnpm test:e2e`, see "Known issues").
-8. Write your notes (section 11).
-
-## 9. Tests
-
-```bash
-pnpm test:request     # only the Task 6 specs (src/common)
-pnpm test             # everything, no database needed
-pnpm test:e2e         # builds, then runs the database suites (see "Known issues")
+```json
+{
+  "id": "6f1c0b7e-0b41-4b9a-9d2e-2c7a1b8c9d10",
+  "originalName": "example-image.jpg",
+  "mimeType": "image/jpeg",
+  "extension": "jpg",
+  "size": 245000,
+  "category": "IMAGE",
+  "status": "ACTIVE",
+  "createdAt": "2026-11-05T10:00:00.000Z",
+  "updatedAt": "2026-11-05T10:00:00.000Z"
+}
 ```
 
-| File | What it checks |
+Use `FileInterceptor`, `@UploadedFile()`, your file pipe, then `MediaService.uploadOne()`. The controller stays thin. A file sent under any other field name, or an unknown extra text field, is a `400`.
+
+### Module B – Multer configuration (`src/media/config/`)
+
+`buildMulterOptions(limits)` returns the Multer options: file size, file count, and finite limits for fields / parts / field size. You choose `storage` deliberately. Configuration lives outside the controller. `loadUploadLimits(env)` reads `MEDIA_MAX_FILE_SIZE_BYTES` (default 5 MiB) and `MEDIA_MAX_FILES` (default 5); the values come into the app through the `UPLOAD_LIMITS` token.
+
+Explain in your notes: when MemoryStorage is acceptable, when DiskStorage is, what a large in-memory upload does to the process, why temporary files need cleanup, and why limits must exist even though the validators also check the size.
+
+### Module C – File validation (`src/common/validators/`, `src/media/pipes/`)
+
+Supported types only: **JPEG, PNG, WebP, PDF** (`ALLOWED_MEDIA_TYPES` in `media.constants.ts`). Four validators extend Nest's `FileValidator`:
+
+| Validator | Judges | Must not trust |
+|---|---|---|
+| `MaxFileSizeValidator` | size, empty files | the reported `size` |
+| `AllowedMimeTypeValidator` | declared MIME type, exact match | prefixes, wildcards |
+| `AllowedExtensionValidator` | extension of the name, case-insensitive, consistent with the MIME type | double extensions, trailing dots/spaces, directory parts |
+| `FileSignatureValidator` | the **bytes** (magic numbers) and that they match the declared type | everything the client wrote |
+
+`createMediaFilePipe(limits)` composes them with `ParseFilePipe`. Missing file / invalid file → `400`; a file above Multer's limit → `413` (Nest maps Multer's `LIMIT_FILE_SIZE` for you – check it with the test, do not assume). Research the four signatures yourself. A signature check is necessary, not sufficient: write down what it does not prove.
+
+### Module D – Multiple files (`POST /media/upload/multiple`)
+
+Field `files`, `FilesInterceptor`, at most `maxFiles`. **Policy: all-or-nothing.** If any file is invalid or any storage/database step fails, no file of the request may remain stored or ACTIVE. Storage and PostgreSQL cannot share a transaction, so you need a compensation strategy (undo what already happened). Document it, including what you do when the *undo itself* fails.
+
+### Module E – Storage abstraction (`src/storage/`)
+
+`StorageService` (given): `upload`, `read`, `exists`, `delete`. `STORAGE_SERVICE` / `STORAGE_CONFIG` tokens (given). `LocalStorageService` (yours):
+
+- the key is generated by the storage, from a CSPRNG; it is **relative** to the root; the original name never reaches the storage layer;
+- no user input decides a path: the `extension` hint is untrusted; keys passed to `read` / `exists` / `delete` are validated and the resolved path must stay inside the root (also through symbolic links) → otherwise `InvalidStorageKeyError`;
+- never overwrite; unique under concurrency;
+- `delete` is idempotent; `read` of a missing object → `StorageObjectNotFoundError`;
+- the root (`STORAGE_LOCAL_ROOT`, absolute, required, **no default**) must not be a directory the web server serves.
+
+`MediaService` and the controller only see the interface. Prove that to yourself: could you write `S3StorageService` without editing `MediaService`?
+
+### Module F – Metadata and database (`src/media/entities/`, `src/migrations/`)
+
+Map the `Media` entity (fields in `media.entity.ts`) and write the migration (`1793880000000-CreateMedia.ts` is an empty skeleton – fill it or replace it with a generated one, never keep two). Requirements, all checked by `test/integration/media.int-spec.ts`: real FK to `users` with an explicit `ON DELETE` (never a silent `CASCADE` that orphans files), UNIQUE `storageKey`, NOT NULL where sensible, CHECK constraints (`size >= 0`, category, status), `timestamptz`, an index for "files of a user", `status` defaults to `UPLOADING`, no `bytea`.
+
+**Lifecycle:** `UPLOADING` → bytes stored → `ACTIVE`. On failure `FAILED` or no row at all (your choice, documented). After any failed upload there is no `ACTIVE` / `UPLOADING` row and no object left in storage. Answer both scenarios in your notes: *(1)* file stored, database fails; *(2)* row created, storage fails. And: what cleans up a crash between the two steps?
+
+### Module G – Retrieval and download
+
+| Method | Path | Success |
+|---|---|---|
+| GET | `/media?category=&page=&limit=` | `200` array of metadata, own ACTIVE files, newest first |
+| GET | `/media/:id` | `200` metadata |
+| GET | `/media/:id/download` | `200` the bytes |
+| DELETE | `/media/:id` | `204` no body |
+
+The id comes from the URL, the file from the **database record** and the storage abstraction – never from a path sent by the client. Download headers: the validated `Content-Type`, `Content-Disposition: attachment` with a safely encoded name (RFC 6266 / 5987: quotes, non-ASCII, control characters, very long names), `X-Content-Type-Options: nosniff`. No upload is ever rendered inline.
+
+### Module H – Deletion and cleanup
+
+Verify ownership → delete the object → delete the metadata. Policy (tested): hard delete; an object that is already missing is not an error; if the **storage delete fails** the row is kept and the call fails (so a retry is possible); the client never sees storage error text. Document: sync vs async deletion, when you would prefer soft delete, and what a periodic cleanup job for `UPLOADING` / `FAILED` rows and orphaned objects would look like (you do not have to build it).
+
+## 6. Security checklist
+
+| Threat | Expected defence |
 |---|---|
-| `src/common/providers/request-processing.provider.spec.ts` | the config function and the provider (defaults, invalid values, DI, overrides) |
-| `src/common/middleware/request-logging.middleware.spec.ts` | the class alone, and the registered middleware over HTTP (ids, header, logs, sensitive data, disabled logging) |
-| `src/common/interceptors/request-timing.interceptor.spec.ts` | success, failure, exactly-once, response untouched, config flag, `@SkipRequestTiming()` precedence – with a **faked clock** |
-| `src/common/pipes/*.spec.ts` | both pipes, including the configured maximum |
-| `src/common/decorators/*.spec.ts` | the parameter decorator and the metadata decorator |
-| `src/common/request-processing.http.spec.ts` | the whole lifecycle over HTTP: metadata, timing, guard-before-pipe order, pagination, Task 5 RBAC intact, no secrets in logs |
-| `test/request-processing.e2e-spec.ts` | a smoke test against the real `AppModule` and PostgreSQL |
+| File type spoofing (`.jpg` that is HTML or an ELF binary) | signature + MIME + extension consistency |
+| Path traversal in name, key or extension | generated keys, containment check, symlink check |
+| Unrestricted size / count | Multer limits **and** validator, finite parts/fields |
+| Reading another user's file by changing the id | ownership in the service, `404` |
+| Files reachable without authentication | root outside any static directory, no static route |
+| Memory exhaustion | no unbounded MemoryStorage |
+| Stored XSS (SVG / HTML served back) | only 4 types, `attachment`, `nosniff` |
+| Header injection / broken headers via file name | encode the name, never concatenate it |
+| Information leakage | no paths, stack traces, driver messages in responses |
+| Accumulating junk | cleanup of failed uploads and temp files |
 
-Rules:
+## 7. Error contract
 
-- **Do not edit the provided tests** to make them pass. If you believe a test is wrong, explain why in your notes; do not change it.
-- Test helpers changed for Task 6 (backward compatible): `test/helpers/rbac-app.ts` (`createFixture({ requestConfig })`, `logs`, imports `RequestProcessingModule`), `test/helpers/in-memory-repository.ts` (`skip`/`take`). New helpers: `http-execution-context.ts`, `param-decorator.ts`.
-- You may **add** tests (for example for your URL sanitizing). Tests must not depend on exact milliseconds or on the text of a log line; use the fake clock.
-- The scaffold is deliberately red: expect failures until you implement the TODOs.
+| Situation | Status |
+|---|---:|
+| Missing file, wrong field name, unknown text field, invalid type/signature/extension, empty file, too many files, malformed id/query | 400 |
+| Missing or invalid token | 401 |
+| File of another user (non-admin) / unknown id / object missing in storage on download | 404 |
+| File above the size limit | 413 |
+| Storage or database failure | 500, body `Internal server error` only |
 
-## 10. Definition of Done
+All errors use the existing envelope from `GlobalExceptionsFilter` (`test/helpers/api-error.ts` checks it).
 
-- [ ] `pnpm test` is green, including every Task 5 test, with the provided tests untouched
-- [ ] `pnpm build` and `pnpm lint` are clean
-- [ ] `RequestProcessingModule` is imported by `AppModule`; the application starts with no `.env` entries for Task 6 (defaults) and refuses to start with `MAX_PAGE_SIZE=abc`
-- [ ] A request to any route, even a `401` or a `404`, has the request id header
-- [ ] No secret in any log entry (try it with a real login request)
-- [ ] The middleware and the interceptor contain no `console`, no database access, no `if (user.role …)`, and no hard-coded configuration
-- [ ] `ResponseInterceptor` is still unregistered and the response bodies are unchanged
-- [ ] Your notes answer the 14 lifecycle questions in your own words and justify the design decisions below
+## 8. Files in this task
 
-## 11. Notes you must write
+```text
+src/storage/
+  interfaces/storage-service.interface.ts     StorageService, StoredObject           GIVEN
+  storage.errors.ts                           InvalidStorageKeyError, ...            GIVEN
+  tokens/storage.tokens.ts                    STORAGE_SERVICE, STORAGE_CONFIG        GIVEN
+  config/storage.config.ts                    loadStorageConfig()                    TODO
+  services/local-storage.service.ts                                                  TODO
+  storage.module.ts                           provider registration                  GIVEN, review
+src/media/
+  enums/*, media.constants.ts, interfaces/media.interface.ts                         GIVEN
+  entities/media.entity.ts                    only the primary key is mapped         TODO
+  dto/upload-media.dto.ts, dto/query-media.dto.ts                                    TODO
+  config/upload-limits.ts, config/multer.config.ts                                   TODO
+  pipes/media-file.pipe.ts                                                           TODO
+  media.service.ts                                                                   TODO
+  media.controller.ts                         every handler answers 501              TODO
+  media.module.ts                             not imported by AppModule yet          TODO
+src/common/validators/                        4 validators                           TODO
+src/migrations/1793880000000-CreateMedia.ts   empty skeleton                         TODO
+test/helpers/media-fixtures.ts, fake-storage.ts, flaky-storage.ts, media-app.ts     GIVEN
+```
 
-Create `NOTES.md` (any length, plain language) with:
+Tests (all given; unit tests follow the repository convention `src/**/*.spec.ts` instead of `test/`):
 
-1. The 14 questions of section 4.
-2. Which provider pattern you used and why; why a token and not a class.
-3. Global or controller-level interceptor registration, and what changes.
-4. The relation between `ParseResourceIdPipe` and `ParsePositiveIntPipe`.
-5. Which RxJS operators your interceptor uses, and what happens to each on success, error and cancellation.
-6. What you decided is "sensitive" in a URL, and where.
-7. One thing in this assignment you found surprising.
+| File | Needs | Covers |
+|---|---|---|
+| `src/common/validators/file-validators.spec.ts` | nothing | Module C validators |
+| `src/media/pipes/media-file.pipe.spec.ts` | nothing | Module C pipe |
+| `src/media/config/media-config.spec.ts` | nothing | Module B |
+| `src/storage/config/storage.config.spec.ts` | nothing | Module E config |
+| `src/storage/services/local-storage.service.spec.ts` | temp directory | Module E |
+| `src/media/media.service.spec.ts` | nothing (fakes) | Modules A, D, F, G, H logic |
+| `test/integration/media.int-spec.ts` | PostgreSQL test DB | Module F schema |
+| `test/media.e2e-spec.ts` | PostgreSQL test DB + temp storage | everything over HTTP |
+| `test/media-registration.e2e-spec.ts` | PostgreSQL test DB, `STORAGE_LOCAL_ROOT` | `MediaModule` is registered in the real `AppModule` |
 
-## 12. Advanced challenges (optional)
+## 9. Implementation checklist (suggested order)
 
-- Make the request id available to the **services** without passing it through every call (`AsyncLocalStorage`) and explain why `Scope.REQUEST` is a poor fit.
-- Use `useExisting` to expose the config under a second token, and explain when an alias is useful.
-- Add a `Server-Timing` response header from the interceptor – and explain why that violates "do not touch the response" unless you take care.
-- Add `Link`/`X-Total-Count` pagination headers without changing the array body.
-- Handle client disconnects: what does the interceptor see when the client aborts?
+1. Read section 4 and answer questions 1–5 in `NOTES.md`.
+2. Entity + migration → `pnpm test:integration` for `media`.
+3. `loadStorageConfig`, `loadUploadLimits`.
+4. `LocalStorageService` → `pnpm vitest run src/storage`.
+5. The four validators and `createMediaFilePipe` → `pnpm vitest run src/common/validators src/media/pipes`.
+6. `buildMulterOptions`.
+7. `MediaService` (single upload first, then `uploadMany`, list, get, download, remove) → `pnpm vitest run src/media`.
+8. Controller wiring, `MediaModule`, **import `MediaModule` in `AppModule`**, add `STORAGE_LOCAL_ROOT` to your `.env`.
+9. `pnpm test:e2e`.
+10. Security review against section 6; finish `NOTES.md`.
 
-## 13. Failures that cap the score at 59
+## 10. Commands
 
-- A secret (token, cookie, password, sensitive query value) in a log entry
-- A request id taken from the client
-- A change that weakens Task 5 authorization (a guard removed or reordered, a route open to anonymous callers)
-- The interceptor changing the response body, status or error
-- Business logic or database access in the middleware or the interceptor
-- The provided tests edited to make them pass, or assertions weakened
+```bash
+pnpm vitest run src/common/validators src/media src/storage   # unit tests, no database
+pnpm db:test:up && pnpm test:integration                       # schema tests
+pnpm test:e2e                                                  # builds, migrates the TEST db, runs HTTP tests
+pnpm test                                                      # all unit tests (Tasks 1-7)
+```
 
-## 14. Known issues of the repository (not part of your task)
+## 11. Rules
 
-- `pnpm test:e2e` currently fails to start in every database suite with `Data type "undefined" in "User.role" is not supported by "postgres" database` – the `role` column of the Task 5 `User` entity has no explicit `type`, and the test runner does not emit the metadata TypeORM would infer it from. This predates Task 6. Fixing it is allowed (and small: give the column an explicit `type`/`enum`); do it in a separate commit and say so in your notes. Until it is fixed, `test/request-processing.e2e-spec.ts` cannot run; the HTTP spec covers the same ground without a database.
-- `tsc -p tsconfig.json` reports a few type errors in older spec files (`auth.service.spec.ts`, `projects.controller.spec.ts`, `tasks.controller.spec.ts`). `pnpm build` (which excludes specs) is clean.
+- Do not edit or weaken a given test or helper. Extending the fake repository with a method you need is fine; changing what a test expects is not.
+- Run Node 24 (`nvm use`). Never turn on `synchronize`.
+- Do not add new dependencies without a reason written in `NOTES.md` (`multer` and `@types/multer` are already installed).
+- Known state inherited from Task 6: `test/auth.e2e-spec.ts` › "is a real, verifiable HS256 token signed with the configured secret" depends on the order of JWT claims and fails; it is not part of this task.
+
+## 12. Acceptance criteria
+
+- All Task 7 tests green, all earlier suites unchanged (except the known test above).
+- `MediaModule` is imported by `AppModule`; the application starts with a real `.env`.
+- No response, log line or error message contains a filesystem path, a storage key or a driver message.
+- `NOTES.md` answers section 4's ten questions and documents: MemoryStorage vs DiskStorage choice, the compensation strategy for single and multiple uploads, the deletion policy, what a signature check does not prove, and how you would add an S3 implementation.

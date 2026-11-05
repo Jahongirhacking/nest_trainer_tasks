@@ -1,104 +1,89 @@
-# Hints – Assignment 6 (Request Processing System)
+# Hints – Assignment 7 (Secure Media Upload Service)
 
 Open one level at a time. Try for at least 30 minutes before the next one. There is no complete solution here on purpose.
 
 ---
 
-## Level 1 – Conceptual: which tool, and why
+## Level 1 – Conceptual
 
-**Module A – middleware.**
-- Middleware is the first thing that touches a request, before NestJS knows which controller, guard or handler will serve it. It sees `req`/`res` – the same objects Express gives any middleware – and nothing about the route's metadata.
-- Ask yourself: what work *must* happen for every request, even one that a guard rejects or that matches no route? A request id is the classic example. Why can an interceptor not do that job?
-- The listeners you attach to `res` are how you learn what happens *later*. Which `res` events does Node emit when a response is complete? Which one also fires when the client goes away?
+**What Multer does.** `multipart/form-data` is a body made of *parts* separated by a boundary. Each part has headers (`name`, `filename`, `Content-Type`) and a body. Express does not parse it; Multer (built on a streaming parser) does. It enforces limits while reading, then exposes the result as `req.file` / `req.files`. Everything in the part *headers* was written by the client.
 
-**Module B – interceptor.**
-- An interceptor wraps the handler. Everything before `next.handle()` runs "before", and whatever you do to the returned stream runs "after". Read what `CallHandler` is for: the handler does not run until something subscribes.
-- Why does Nest use an `Observable` here and not a Promise? What can a stream do that a Promise cannot (think: several values, cancellation, composing steps)?
-- Lay out three questions for every RxJS operator you consider: *does it change the value? does it run on errors? does it run on unsubscribe?* Then compare `tap`, `map`, `catchError` and `finalize` with those questions. One of them must not be used for logging.
+**What `FileInterceptor` does.** It is a Nest interceptor that runs Multer for you on the Express request and converts Multer's errors into HTTP exceptions. Ask yourself: at which stage of the lifecycle does it run relative to guards and pipes? What does that mean for an unauthenticated upload of 2 GB?
 
-**Module C – pipes.**
-- A pipe transforms or validates **one argument** right before the handler. A DTO plus `ValidationPipe` describes the shape of a whole object with decorators. When is a few lines of code better than a class with five decorators? When is it worse?
-- Where does the global `ValidationPipe` sit relative to a pipe you attach to a single parameter? Read `src/app.setup.ts`, then read the comment at the top of `src/common/decorators/positive-int-param.decorator.ts`. That comment describes a trap you will meet.
+**Why abstract the storage.** `MediaService` wants to say "keep these bytes, give me a handle, later give me the bytes back, later forget them". Whether that means a directory, S3 or R2 is infrastructure. If `MediaService` imports `fs`, replacing the disk means rewriting business logic and every test. A narrow interface + an injection token = replaceable and fakeable.
 
-**Module D – custom providers.**
-- You need an object that is *computed* (from the environment), *validated*, *shared*, and *replaceable in tests*. Which of the four provider recipes gives you each of those? Which one would you pick if the value were a constant? If it needed other providers injected?
-- Why an injection **token** and not a class? What would `@Inject(...)` look like for something that is not a class?
+**Why metadata goes into the database.** Listing "my files", filtering, ownership, unique keys, constraints and joins are database jobs. Putting bytes in PostgreSQL makes backups, memory use and queries painful; object stores are built for bytes. The row is the *index* of the file and the source of truth for who may see it.
 
-**Module E – decorators.**
-- A parameter decorator is a function that Nest calls with "the execution context" when it prepares the handler's arguments. What is in an `ExecutionContext` besides the request? Why does Nest not hand you `req` directly? (Think: HTTP, WebSockets, gRPC.)
+**Why the MIME type cannot be trusted.** `Content-Type: image/jpeg` is a string in a header the client typed. So is the file name and its extension. What would a tool like `curl -F` let you send? Think about what *kind of information* about a file cannot be faked cheaply, and where in the file it lives.
 
-**Module F – metadata.**
-- A metadata decorator writes a key/value pair on a class or a method; `Reflector` reads it back. Which of the two places (handler, class) should win if both have a value? Check which `Reflector` helper encodes exactly that rule.
+**The consistency problem.** Two systems (disk, database), no shared transaction. Whatever order you pick, a crash or an error between the two steps leaves something half-done. Which half is cheaper to find and clean: a row without a file, or a file without a row? How would you recognise each?
 
-**Lifecycle questions (section 4).** The official documentation has a page called "Request lifecycle". Read it once, then close it and draw the diagram from memory *including* where exception filters catch things.
+**Ownership.** "Is this id valid?" and "is this *your* id?" are different questions. What does a `403` tell an attacker that a `404` does not?
 
 ---
 
-## Level 2 – Technical: the APIs
+## Level 2 – Technical: which APIs
 
-- Middleware: `NestMiddleware` (`use(req, res, next)`), `NestModule#configure(consumer: MiddlewareConsumer)`, `consumer.apply(...).forRoutes(...)`. The middleware class can have constructor injection; it must be registered through a module for that to work. Node: `res.on('finish', …)`, `res.setHeader(…)`, `crypto.randomUUID()`, `performance.now()` / `process.hrtime.bigint()` / `Date.now()`.
-- Express: `req.originalUrl` keeps the full url (`req.url` is relative to the mount point); `req.ip`, `req.headers['user-agent']`.
-- Interceptor: `NestInterceptor#intercept(context, next)`, `context.switchToHttp().getRequest()/getResponse()`, `context.getHandler()`, `context.getClass()`, `next.handle()`. RxJS: `tap({ next, error, complete })` (the object form), `catchError`, `throwError`, `finalize`. Registration: a provider with the `APP_INTERCEPTOR` token (global, but still created by DI inside its module) or `@UseInterceptors()` on a controller.
-- `HttpException#getStatus()`; `instanceof HttpException`.
-- Pipes: `PipeTransform#transform(value, metadata: ArgumentMetadata)`; `BadRequestException`. Attach with `@Param('id', ParseResourceIdPipe)` or `@Query(PaginationPipe)`. A pipe passed as a **class** is instantiated by Nest in the context of the module that owns the controller – so its constructor dependencies must be visible *there*.
-- Providers: `{ provide: TOKEN, useValue | useClass | useFactory | useExisting }`, `@Inject(TOKEN)`, `inject: [...]` for factories, `exports` / `imports` for crossing module boundaries. `Test.createTestingModule(...).overrideProvider(TOKEN).useValue(...)` is how the tests swap your provider.
-- Decorators: `createParamDecorator((data, ctx: ExecutionContext) => …)`; `SetMetadata(key, value)`; `Reflector#get`, `#getAll`, `#getAllAndOverride`, `#getAllAndMerge`.
-- Testing: `vi.useFakeTimers()` fakes `Date`, `performance` **and** `process.hrtime`; `vi.advanceTimersByTimeAsync(ms)` moves them. `lastValueFrom(observable)` turns a stream into a Promise.
+- `@nestjs/platform-express`: `FileInterceptor(fieldName, options)`, `FilesInterceptor(fieldName, maxCount, options)`, `FileFieldsInterceptor([...])`. Multer options: `limits` (`fileSize`, `files`, `fields`, `parts`, `fieldSize`, `headerPairs`), `storage` (`memoryStorage()`, `diskStorage({...})`), `fileFilter`.
+- Parameter decorators: `@UploadedFile(pipe)`, `@UploadedFiles(pipe)`. Read what is in `file`: `originalname`, `mimetype`, `size`, `buffer` *or* `path`.
+- `ParseFilePipe` (`validators`, `fileIsRequired`, `errorHttpStatusCode`, `exceptionFactory`), `ParseFilePipeBuilder`, built-in `MaxFileSizeValidator` and `FileTypeValidator`. Read their source: what does `FileTypeValidator` actually look at? Why are the project's own validators named like Nest's?
+- `FileValidator` (abstract class): `isValid(file)` and `buildErrorMessage(file)`. A validator can be async.
+- How Nest maps Multer's errors: look for `LIMIT_FILE_SIZE`, `LIMIT_FILE_COUNT`, `LIMIT_UNEXPECTED_FILE` in `@nestjs/platform-express/multer/multer/multer.utils.js` and see which HTTP exception each becomes.
+- Files: `node:fs/promises` (`open` with the `wx` flag, `mkdir` with `recursive`, `rm`, `realpath`, `stat`, `createReadStream`), `node:path` (`resolve`, `relative`, `sep`, `isAbsolute`), `node:crypto` (`randomBytes`, `randomUUID`).
+- Responses: `StreamableFile`, `@Res({ passthrough: true })`, `res.set(...)`, `@Header()`. Look at RFC 6266 / RFC 5987 for `filename*=UTF-8''...`.
+- Providers: `Provider` with `useFactory` + `inject`, `overrideProvider(TOKEN).useValue(...)` in tests (see `test/helpers/media-app.ts`).
+- TypeORM: `@Entity`, `@PrimaryGeneratedColumn('uuid')`, `@Column({ type, length, unique })`, `@ManyToOne(() => User, { onDelete })` + `@JoinColumn`, `@Index`, `@Check`, `@CreateDateColumn({ type: 'timestamptz' })`; `pnpm migration:generate`.
+- Tests: `Test.createTestingModule`, `getRepositoryToken(Media)`, supertest `.attach(field, buffer, { filename, contentType })`.
 
 ---
 
 ## Level 3 – Implementation direction
 
-**Suggested order:** config function → provider → pipes → decorators → middleware → module wiring → interceptor → controller wiring. Run `pnpm test:request` after each step and read *which* tests turned green.
+**Suggested sequence.** Follow the checklist in `ASSIGNMENT.md` section 9. Run the single spec file of the piece you are writing (`pnpm vitest run src/storage`), read *which* tests turned green, and only then move on. The e2e tests are the last thing to look at, not the first.
 
-**Edge cases and common mistakes**
+**Validation strategies.**
+- Layer cheap checks before expensive ones: presence → size → declared MIME → extension → content. Each validator should do one thing.
+- A signature check compares the *first bytes* with a table you write yourself. Some formats need more than a prefix (a container format has a prefix shared with unrelated formats). Check the tests for the one that does.
+- Keep the type table in one place (`ALLOWED_MEDIA_TYPES`); do not repeat the strings in four files.
+- Decide what the validators do when `file.buffer` is missing (DiskStorage). A validator that "cannot check" must not answer `true`.
+- Do not reflect the user's file name into error messages without thinking about what a message with newlines or HTML does in a log.
 
-*Config*
-- `Number('')` is `0`, `Number(' ')` is `0`, `Number('1e3')` is `1000`, `Number('0x10')` is `16`. A regular expression on the *string* first, then a number.
-- `process.env` read at the top of a file runs at import time, not when the module is created. The provider spec changes the environment between two module creations.
-- Freeze the object; make sure the test that passes `{}` really gets defaults and not the values of your shell.
+**Storage design.**
+- A key like `ab/cd/<32 hex chars>.<ext>` gives a CSPRNG name and a fan-out so one directory does not hold a million files. You decide the layout; the tests only require safe characters and relative keys.
+- Validate a key *before* touching the disk, then resolve and verify the result is inside the root. A string test for `..` alone is not enough: think about absolute paths, backslashes, encoded forms and symbolic links (`realpath`).
+- To not overwrite: create with exclusive flags (`wx`) and retry with a new key on `EEXIST`, instead of "check then write".
+- Make writes safe against a half-written file being read (write to a temporary name in the same directory, then rename) – and then think about what a crash leaves behind.
 
-*Pipes*
-- Query values arrive as `string | string[] | object` (`?page=1&page=2`, `?page[a]=1`). A function that only handles strings is a bug.
-- The id pipe returns a number, but the global `ValidationPipe` (`transform: true`) converts a parameter whose TypeScript type is `number` *before* your pipe sees it – and `Number('1e3')` is `1000`. Look at how `PositiveIntParam` avoids that, and at the type of `id` in the given `GET /tasks/:id` handler.
-- Decide the default `limit` when `maxPageSize` is smaller than 10.
+**Where the logic belongs.**
+- Controller: wiring only. Service: policy (ownership, order of operations, compensation). Storage: bytes and keys. Config functions: parsing environment variables.
+- The service never builds a path and never imports `fs`. If you catch yourself writing `join(` in `MediaService`, stop.
 
-*Middleware*
-- `res.statusCode` is only meaningful when the response is finished. Which event do you wait for?
-- Registering with `forRoutes('*')` should include routes that do not exist; verify with the 404 test instead of assuming. If your Nest version warns about the wildcard, read the warning.
-- Where does the sanitizing of the url live? You need it in more than one place (middleware, interceptor) – a single small function is better than two copies.
-- If `config.requestLoggingEnabled` is `false`, do not even build the entries.
+**Order of operations (think before choosing).**
+1. Insert the row as `UPLOADING`, store, set `ACTIVE`; on error mark `FAILED`/delete and delete the object.
+2. Store first, insert row `ACTIVE`; on error delete the object.
+Compare the failure windows of both, then compare them for the multi-file case. Whatever you choose, an error in the *cleanup* must not hide the original error and must not leak to the client.
 
-*Interceptor*
-- On the *error* path `tap`'s `next` callback never runs; on the *success* path `error` never runs. Which callback of the object form covers "the stream ended"? Which would log twice if you combined it with `finalize`?
-- `delay()` shifts values but **not** errors. (The given tests know that.)
-- The status code on the success path: look at when Nest writes the status of the response relative to your `tap`. Check what you see for `GET` and think about `POST`.
-- For errors, the interceptor sees the exception *before* the filter turns it into a response. How do you get a status code out of it?
-- Exactly one entry. If you use more than one operator, which one owns the logging?
-- Do not `catchError` and return something else; if you catch, you must rethrow the same error.
-- `reflector.getAllAndOverride` takes `[handler, class]` in a specific order. Test it with the three combinations in the spec.
+**Error handling.**
+- Throw Nest exceptions from the service for expected cases (`NotFoundException`, `BadRequestException`); let unexpected errors become the generic 500 of the global filter, but make sure *their messages never reach the body* and are logged somewhere you can find them.
+- Map storage errors to domain errors in the service (`StorageObjectNotFoundError` on download → 404).
 
-*Provider wiring*
-- A global interceptor registered with `APP_INTERCEPTOR` *inside* `RequestProcessingModule` still applies to the whole app. It also needs `Reflector`, the config and the logger resolvable in that module – they are.
-- `RbacModule` must be able to resolve `REQUEST_PROCESSING_CONFIG` for `PaginationPipe`. Import the module that **exports** it.
+**Queries.**
+- Ownership belongs in the `where` (`id` + `uploadedById`) or in an explicit check right after loading; either way an unknown id and someone else's id must behave identically.
+- The fake repository only supports plain equality, `find` (`where`, `skip`, `take`), `findOne`, `save`, `remove`, `count`. Sorting and `In()` need real PostgreSQL – extend the fake if you need more, or sort in the e2e tests' domain.
 
-**Testing strategies**
-- Run a single file: `pnpm vitest run src/common/pipes/pagination.pipe.spec.ts`.
-- When an HTTP test fails, print `f.logs` – it is the array every entry goes to.
-- To see what a real request looks like, start the app against the dev database and call `GET /tasks/my` with a token; check that the default sink prints one JSON line per entry.
-- Mutation check: temporarily break your own code (return the wrong status, log twice, remove the header) and confirm a test notices.
+**Testing techniques.**
+- Failure injection: `FakeStorageService.failUploadAt`, `failDelete`; make the fake repository's `save` throw only after the storage got a file (see `media.service.spec.ts`).
+- Look at a directory before and after (`listFiles`) instead of asserting on a return value alone.
+- For downloads, collect the response as a Buffer (`.buffer(true).parse(...)`) and compare bytes.
 
----
-
-## Level 4 – Design questions you should be able to defend
-
-1. Why is the request id generated in a middleware and not in the interceptor or a guard? What would be lost?
-2. Why must the id never be taken from the client, and what is the cost of that choice for a real distributed system?
-3. Why does a `401` request have a `request.completed` entry but no `request.timing` entry? Where in the lifecycle does the guard sit?
-4. Why does a request with a bad id still produce a `request.timing` entry (outcome `error`, status 400)?
-5. Why `tap` and not `map` for logging? What would `map` break?
-6. What is the difference between logging in `tap({ complete })` and in `finalize`? What would each do if the client disconnected?
-7. Why is the limit *rejected* instead of reduced? What would a client that asks for 10 000 items experience in each design?
-8. Why is `@SkipRequestTiming(false)` useful, and why is "no metadata means timed" the right default?
-9. Could `ConfigService` from `@nestjs/config` replace the custom provider? What would you gain, what would you lose, and why was it not used here?
-10. What would change if the interceptor were registered on one controller instead of globally?
+**Common security mistakes.**
+- Using `file.originalname` (or its extension) to build the path or the header.
+- Trusting `file.mimetype` / `file.size`.
+- Creating the storage directory under `public/` or serving it with `ServeStaticModule`.
+- `Content-Disposition: inline` and the stored `Content-Type` for user content.
+- Returning the entity directly (it contains `storageKey`).
+- A 403 for other users' files, or a different message for "missing" and "not yours".
+- Catching an error and returning `error.message`.
+- Cleaning up only on the happy path of validation, not when Multer rejects the request.
+- "Check that the file does not exist, then write it" (race).
+- No limit on the number of parts, only on the size of the file.
