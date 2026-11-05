@@ -1,4 +1,5 @@
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface.js';
+import multer from 'multer';
 import type { UploadLimits } from '../interfaces/media.interface.js';
 
 /**
@@ -16,5 +17,11 @@ import type { UploadLimits } from '../interfaces/media.interface.js';
  *       files left by DiskStorage when a request fails.
  */
 export function buildMulterOptions(_limits: UploadLimits): MulterOptions {
-  throw new Error('Not implemented');
+  return {
+    storage: multer.memoryStorage(),
+    limits: {
+      files: _limits.maxFiles,
+      fileSize: _limits.maxFileSizeBytes,
+    },
+  };
 }

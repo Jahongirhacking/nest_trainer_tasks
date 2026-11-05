@@ -25,5 +25,13 @@ export interface StorageConfig {
  * TODO: Implement it.
  */
 export function loadStorageConfig(_env: NodeJS.ProcessEnv): StorageConfig {
-  throw new Error('Not implemented');
+  const driver = _env.STORAGE_DRIVER;
+  if (driver && driver !== 'local')
+    throw new Error('Only local driver available');
+  const localRoot = _env.STORAGE_LOCAL_ROOT;
+  if (!localRoot) throw new Error('Local root not found');
+  return {
+    driver: (driver || 'local') as 'local',
+    localRoot,
+  };
 }

@@ -6,6 +6,8 @@ import {
   buildTypeOrmOptions,
   loadEnvFile,
 } from './database/database.config.js';
+import { MediaModule } from './media/media.module.js';
+import { UploadConfigModule } from './media/upload-config.module.js';
 import { ProjectsModule } from './projects/projects.module.js';
 import { RbacModule } from './rbac/rbac.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
@@ -23,6 +25,8 @@ import { TasksModule } from './tasks/tasks.module.js';
     TasksModule,
     RbacModule,
     RequestProcessingModule,
+    MediaModule,
+    UploadConfigModule,
   ],
 })
 export class AppModule {}

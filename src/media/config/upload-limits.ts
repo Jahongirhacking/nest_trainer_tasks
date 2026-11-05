@@ -1,3 +1,4 @@
+import { checkSafeInt } from '../../common/utils/checkSafeInt.js';
 import type { UploadLimits } from '../interfaces/media.interface.js';
 
 /**
@@ -15,5 +16,10 @@ import type { UploadLimits } from '../interfaces/media.interface.js';
  * TODO: Implement it.
  */
 export function loadUploadLimits(_env: NodeJS.ProcessEnv): UploadLimits {
-  throw new Error('Not implemented');
+  const maxFileSizeBytes = checkSafeInt(_env.MEDIA_MAX_FILE_SIZE_BYTES);
+  const maxFiles = checkSafeInt(_env.MEDIA_MAX_FILES);
+  return {
+    maxFileSizeBytes,
+    maxFiles,
+  };
 }

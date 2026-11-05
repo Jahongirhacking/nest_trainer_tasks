@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
+import { MulterModule } from '@nestjs/platform-express';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StorageModule } from '../storage/storage.module.js';
-import { loadUploadLimits } from './config/upload-limits.js';
+import { buildMulterOptions } from './config/multer.config.js';
 import { Media } from './entities/media.entity.js';
-import { MediaController } from './media.controller.js';
+import { UploadLimits } from './interfaces/media.interface.js';
 import { UPLOAD_LIMITS } from './media.constants.js';
+import { MediaController } from './media.controller.js';
 import { MediaService } from './media.service.js';
+import { UploadConfigModule } from './upload-config.module.js';
 
 /**
  * Wiring of the Task 7 feature.
@@ -27,12 +30,18 @@ import { MediaService } from './media.service.js';
  *       AuthModule. Do not import AuthModule again.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([Media]), StorageModule],
-  controllers: [MediaController],
-  providers: [
-    MediaService,
-    { provide: UPLOAD_LIMITS, useFactory: () => loadUploadLimits(process.env) },
+  imports: [
+    TypeOrmModule.forFeature([Media]),
+    StorageModule,
+    MulterModule.registerAsync({
+      imports: [UploadConfigModule],
+      inject: [UPLOAD_LIMITS],
+      useFactory: (limits: UploadLimits) => buildMulterOptions(limits),
+    }),
+    UploadConfigModule,
   ],
+  controllers: [MediaController],
+  providers: [MediaService],
   exports: [MediaService],
 })
 export class MediaModule {}

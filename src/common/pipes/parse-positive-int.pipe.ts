@@ -1,13 +1,13 @@
 import { BadRequestException, Injectable, PipeTransform } from '@nestjs/common';
+import { checkSafeInt } from '../utils/checkSafeInt.js';
 
 @Injectable()
 export class ParsePositiveIntPipe implements PipeTransform<unknown, number> {
   transform(value: unknown): number {
-    if (typeof value !== 'string' || !/^\d+$/.test(value))
-      throw new BadRequestException('Validation failed');
-    const numVal = Number(value);
-    if (!Number.isSafeInteger(numVal) || numVal <= 0)
-      throw new BadRequestException('Validation failed');
-    return numVal;
+    try {
+      return checkSafeInt(value);
+    } catch {
+      throw new BadRequestException();
+    }
   }
 }
